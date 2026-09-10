@@ -1,5 +1,5 @@
 {
-  "name": "AI Assistant",
+  "name": "Victor",
   "description": "Victor – a personal AI assistant for casual chat, step-by-step math solving, and general inquiries powered by Gemini.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

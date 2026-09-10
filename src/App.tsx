@@ -16,6 +16,7 @@ import {
   SlidersHorizontal,
   Sun,
   Moon,
+  Trash2,
 } from 'lucide-react';
 import { ChatMessage, ChatSession, ChatMode } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -493,6 +494,22 @@ export default function App() {
             >
               <Plus className="w-3.5 h-3.5" />
               <span className="hidden xs:inline">New Chat</span>
+            </button>
+
+            {/* Delete current chat button */}
+            <button
+              id="header-delete-chat-btn"
+              type="button"
+              onClick={() => {
+                if (currentSession) {
+                  handleDeleteSession(currentSession.id);
+                }
+              }}
+              className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 hover:bg-rose-100 dark:hover:bg-rose-950/50 hover:text-rose-600 dark:hover:text-rose-400 text-zinc-600 dark:text-zinc-400 active:scale-95 transition-all cursor-pointer"
+              title="Delete this conversation"
+              aria-label="Delete this conversation"
+            >
+              <Trash2 className="w-4 h-4" />
             </button>
           </div>
         </header>

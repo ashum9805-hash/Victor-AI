@@ -117,9 +117,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onDeleteSession(session.id);
                     }}
                     title="Delete chat"
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-rose-400 transition-all cursor-pointer"
+                    aria-label={`Delete chat: ${session.title || 'Untitled'}`}
+                    className="p-1.5 rounded-lg hover:bg-zinc-700 active:bg-zinc-700 text-zinc-400 hover:text-rose-400 active:text-rose-400 transition-all cursor-pointer opacity-80 sm:opacity-0 sm:group-hover:opacity-100 shrink-0 touch-manipulation"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <Trash2 className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                   </button>
                 </div>
               );
