@@ -31,7 +31,7 @@ export const MathToolbar: React.FC<MathToolbarProps> = ({ onInsert }) => {
       id="math-toolbar"
       className="flex items-center gap-1.5 overflow-x-auto py-1 px-1 scrollbar-none text-xs"
     >
-      <span className="text-zinc-500 font-medium text-[11px] whitespace-nowrap pl-1 pr-1">
+      <span className="text-zinc-500 dark:text-zinc-400 font-medium text-[11px] whitespace-nowrap pl-1 pr-1">
         Math keys:
       </span>
       {MATH_SYMBOLS.map((sym) => (
@@ -41,7 +41,7 @@ export const MathToolbar: React.FC<MathToolbarProps> = ({ onInsert }) => {
           id={`math-key-${sym.label}`}
           title={sym.tooltip}
           onClick={() => onInsert(sym.latex)}
-          className="px-2 py-1 bg-zinc-100 hover:bg-zinc-200 active:scale-95 text-zinc-800 rounded-md font-mono text-xs border border-zinc-200 transition-colors shrink-0 shadow-2xs"
+          className="px-2 py-1 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 active:scale-95 text-zinc-800 dark:text-zinc-200 rounded-md font-mono text-xs border border-zinc-200 dark:border-zinc-700 transition-colors shrink-0 shadow-2xs"
         >
           {sym.label}
         </button>

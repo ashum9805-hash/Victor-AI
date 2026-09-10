@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, MessageSquare, Trash2, X, Sparkles, Smartphone, Calculator } from 'lucide-react';
+import { Plus, MessageSquare, Trash2, X, Sparkles, Smartphone, Calculator, Sun, Moon } from 'lucide-react';
 import { ChatSession } from '../types';
 
 interface SidebarProps {
@@ -10,6 +10,8 @@ interface SidebarProps {
   onDeleteSession: (id: string) => void;
   isOpen: boolean;
   onClose: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -20,6 +22,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteSession,
   isOpen,
   onClose,
+  theme,
+  onToggleTheme,
 }) => {
   return (
     <>
@@ -28,14 +32,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div
           id="sidebar-backdrop"
           onClick={onClose}
-          className="fixed inset-0 bg-black/30 backdrop-blur-xs z-40 md:hidden transition-opacity"
+          className="fixed top-0 bottom-0 left-0 right-0 bg-black/30 backdrop-blur-xs z-40 md:hidden transition-opacity"
         />
       )}
 
       {/* Sidebar container */}
       <aside
         id="app-sidebar"
-        className={`fixed md:static inset-y-0 left-0 z-50 w-72 bg-zinc-900 text-zinc-100 flex flex-col border-r border-zinc-800 transition-transform duration-200 ease-in-out ${
+        className={`fixed md:static top-0 bottom-0 left-0 z-50 w-72 bg-zinc-900 text-zinc-100 flex flex-col border-r border-zinc-800 transition-transform duration-200 ease-in-out ${
           isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         }`}
       >
@@ -123,16 +127,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* Mobile & Cloud information note */}
-        <div className="p-3 border-t border-zinc-800 text-xs bg-zinc-950/50">
+        {/* Mobile & Cloud information note & Theme Toggle */}
+        <div className="p-3 border-t border-zinc-800 text-xs bg-zinc-950/50 space-y-2.5">
+          <button
+            type="button"
+            id="sidebar-theme-toggle"
+            onClick={onToggleTheme}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs"
+          >
+            <span className="flex items-center gap-2">
+              {theme === 'dark' ? (
+                <Moon className="w-3.5 h-3.5 text-indigo-400" />
+              ) : (
+                <Sun className="w-3.5 h-3.5 text-amber-400" />
+              )}
+              <span>Theme</span>
+            </span>
+            <span className="text-[11px] font-medium text-zinc-400 capitalize bg-zinc-800 px-2 py-0.5 rounded-md">
+              {theme === 'dark' ? 'Dark mode' : 'Light mode'}
+            </span>
+          </button>
+
           <div className="flex items-start gap-2 text-zinc-400 text-[11px] leading-relaxed">
             <Smartphone className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
             <div>
               <span className="font-semibold text-zinc-200">Mobile Ready:</span>{' '}
-              Runs directly in your browser. No Termux or Python setup needed on your phone!
+              Runs directly in your browser. No Termux or Python setup needed!
             </div>
           </div>
-          <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-800/60 text-[10px] text-zinc-500">
+          <div className="flex items-center justify-between pt-2 border-t border-zinc-800/60 text-[10px] text-zinc-500">
             <span className="flex items-center gap-1">
               <Sparkles className="w-3 h-3 text-amber-400" /> Victor · Gemini 3.8 Flash
             </span>

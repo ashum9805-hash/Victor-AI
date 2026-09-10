@@ -14,6 +14,8 @@ import {
   Bot,
   RotateCcw,
   SlidersHorizontal,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { ChatMessage, ChatSession, ChatMode } from './types';
 import { Sidebar } from './components/Sidebar';
@@ -24,6 +26,7 @@ import { PromptSuggestions } from './components/PromptSuggestions';
 
 const STORAGE_KEY_SESSIONS = 'ai_assistant_sessions_v1';
 const STORAGE_KEY_CURRENT = 'ai_assistant_current_id_v1';
+const STORAGE_KEY_THEME = 'victor_theme_mode_v1';
 
 function createNewSession(mode: ChatMode = 'casual'): ChatSession {
   return {
@@ -67,6 +70,36 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showMathToolbar, setShowMathToolbar] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
+
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      const savedTheme = localStorage.getItem(STORAGE_KEY_THEME);
+      if (savedTheme === 'light' || savedTheme === 'dark') return savedTheme;
+      if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        return 'dark';
+      }
+    } catch {
+      // Fallback
+    }
+    return 'dark';
+  });
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY_THEME, theme);
+    } catch {
+      // Ignore
+    }
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -384,7 +417,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-full bg-zinc-100 text-zinc-900 font-sans antialiased overflow-hidden">
+    <div className="chat-app-root flex w-full h-full absolute top-0 bottom-0 left-0 right-0 bg-zinc-100 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans antialiased overflow-hidden transition-colors">
       {/* Sidebar for chat history */}
       <Sidebar
         sessions={sessions}
@@ -394,38 +427,40 @@ export default function App() {
         onDeleteSession={handleDeleteSession}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       {/* Main chat view */}
-      <div className="flex-1 flex flex-col h-full min-w-0 bg-white shadow-xs relative">
+      <div className="chat-view-container flex-1 flex flex-col w-full h-full min-h-0 min-w-0 bg-white dark:bg-zinc-950 shadow-xs relative transition-colors overflow-hidden">
         {/* Top navigation bar */}
         <header
           id="app-header"
-          className="h-14 px-3 sm:px-5 border-b border-zinc-200/80 bg-white/90 backdrop-blur-md flex items-center justify-between gap-2 shrink-0 z-10"
+          className="h-14 shrink-0 px-3 sm:px-5 border-b border-zinc-200/80 dark:border-zinc-800 bg-white/90 dark:bg-zinc-950/90 backdrop-blur-md flex items-center justify-between gap-2 z-10 transition-colors"
         >
           <div className="flex items-center gap-2.5">
             <button
               id="header-sidebar-toggle"
               type="button"
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 rounded-xl text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 active:scale-95 transition-all cursor-pointer"
+              className="p-2 rounded-xl text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition-all cursor-pointer"
               title="Open Chat History"
             >
               <Menu className="w-5 h-5" />
             </button>
 
             <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-zinc-900 text-white flex items-center justify-center">
+              <div className="w-7 h-7 rounded-lg bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 flex items-center justify-center">
                 <Bot className="w-4 h-4" />
               </div>
-              <span className="font-semibold text-sm sm:text-base text-zinc-900 tracking-tight">
+              <span className="font-semibold text-sm sm:text-base text-zinc-900 dark:text-zinc-100 tracking-tight">
                 Victor
               </span>
             </div>
           </div>
 
-          {/* Mode Switcher in Header */}
-          <div className="flex items-center gap-2">
+          {/* Controls: Mode Switcher, Dark/Light Toggle, New Chat */}
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <div className="hidden sm:block">
               <ModeSelector
                 currentMode={currentSession?.mode || 'casual'}
@@ -434,11 +469,26 @@ export default function App() {
               />
             </div>
 
+            {/* Dark / Light Theme Toggle Button */}
+            <button
+              id="header-theme-toggle"
+              type="button"
+              onClick={toggleTheme}
+              className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 hover:bg-zinc-200 dark:hover:bg-zinc-700/80 text-zinc-700 dark:text-zinc-300 active:scale-95 transition-all cursor-pointer"
+              title={theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode (easier at night)'}
+            >
+              {theme === 'dark' ? (
+                <Sun className="w-4 h-4 text-amber-400" />
+              ) : (
+                <Moon className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
+              )}
+            </button>
+
             <button
               id="header-new-chat-btn"
               type="button"
               onClick={() => handleNewSession()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 hover:bg-zinc-200 active:scale-95 text-xs font-medium text-zinc-800 transition-all cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 active:scale-95 text-xs font-medium text-zinc-800 dark:text-zinc-200 transition-all cursor-pointer"
               title="Start a new chat session"
             >
               <Plus className="w-3.5 h-3.5" />
@@ -448,7 +498,7 @@ export default function App() {
         </header>
 
         {/* Mobile Mode Switcher row */}
-        <div className="sm:hidden px-3 py-2 border-b border-zinc-100 bg-zinc-50 flex justify-center">
+        <div className="sm:hidden shrink-0 px-3 py-2 border-b border-zinc-100 dark:border-zinc-800/80 bg-zinc-50 dark:bg-zinc-900 flex justify-center transition-colors">
           <ModeSelector
             currentMode={currentSession?.mode || 'casual'}
             onSelectMode={handleModeChange}
@@ -458,7 +508,7 @@ export default function App() {
 
         {/* Error notification banner */}
         {errorBanner && (
-          <div className="px-4 py-2 bg-rose-50 border-b border-rose-200 text-rose-700 text-xs flex items-center justify-between">
+          <div className="shrink-0 px-4 py-2 bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between">
             <span>{errorBanner}</span>
             <button
               type="button"
@@ -473,12 +523,12 @@ export default function App() {
         {/* Chat Feed */}
         <main
           id="chat-feed-container"
-          className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 space-y-4"
+          className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 space-y-4"
         >
           {currentSession?.messages.length === 0 ? (
             /* Empty state / Welcome screen */
-            <div className="h-full flex flex-col items-center justify-center text-center px-4 max-w-2xl mx-auto py-8">
-              <div className="w-14 h-14 rounded-2xl bg-zinc-900 text-white flex items-center justify-center shadow-md mb-4">
+            <div className="flex flex-col items-center justify-center text-center px-4 max-w-2xl mx-auto py-4 sm:py-8 my-auto">
+              <div className="w-14 h-14 rounded-2xl bg-zinc-900 dark:bg-zinc-800 text-white flex items-center justify-center shadow-md mb-4">
                 {currentSession.mode === 'math' ? (
                   <Calculator className="w-7 h-7" />
                 ) : (
@@ -486,7 +536,7 @@ export default function App() {
                 )}
               </div>
 
-              <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 tracking-tight mb-2">
+              <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight mb-2">
                 {currentSession.mode === 'math'
                   ? 'Victor · Math Solver'
                   : currentSession.mode === 'casual'
@@ -494,7 +544,7 @@ export default function App() {
                   : 'Victor · AI Assistant'}
               </h1>
 
-              <p className="text-sm text-zinc-600 max-w-md mb-6 leading-relaxed">
+              <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-md mb-6 leading-relaxed">
                 {currentSession.mode === 'math'
                   ? 'Ask Victor equations, algebra, calculus, or word problems. Get clear step-by-step solutions with LaTeX formulas.'
                   : currentSession.mode === 'casual'
@@ -503,7 +553,7 @@ export default function App() {
               </p>
 
               {/* Mobile friendly reminder note */}
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs mb-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300 text-xs mb-6">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span>Runs directly in the cloud. No Termux or phone setup required!</span>
               </div>
@@ -532,11 +582,11 @@ export default function App() {
               })}
 
               {isGenerating && (
-                <div className="flex items-center gap-2.5 p-3 text-xs text-zinc-500 font-medium">
+                <div className="flex items-center gap-2.5 p-3 text-xs text-zinc-500 dark:text-zinc-400 font-medium">
                   <div className="flex gap-1 items-center">
-                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0.2s]" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 animate-bounce [animation-delay:0.4s]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 animate-bounce" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 animate-bounce [animation-delay:0.2s]" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 animate-bounce [animation-delay:0.4s]" />
                   </div>
                   <span>Thinking and drafting response...</span>
                 </div>
@@ -549,18 +599,18 @@ export default function App() {
         {/* Input Bar Section */}
         <footer
           id="chat-input-footer"
-          className="border-t border-zinc-200/80 bg-white p-3 sm:p-4 shrink-0"
+          className="mt-auto shrink-0 w-full border-t border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3 sm:p-4 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] transition-colors z-10"
         >
           <div className="max-w-3xl mx-auto">
             {/* Math symbols quick-toolbar */}
             {(showMathToolbar || currentSession?.mode === 'math') && (
-              <div className="mb-2 pb-1 border-b border-zinc-100">
+              <div className="mb-2 pb-1 border-b border-zinc-100 dark:border-zinc-850">
                 <MathToolbar onInsert={handleInsertMathSymbol} />
               </div>
             )}
 
             {/* Input area */}
-            <div className="relative flex flex-col rounded-2xl border border-zinc-300 bg-zinc-50/70 focus-within:border-zinc-900 focus-within:bg-white focus-within:ring-2 focus-within:ring-zinc-900/10 transition-all shadow-2xs">
+            <div className="relative flex flex-col rounded-2xl border border-zinc-300 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/80 focus-within:border-zinc-900 dark:focus-within:border-zinc-600 focus-within:bg-white dark:focus-within:bg-zinc-900 focus-within:ring-2 focus-within:ring-zinc-900/10 dark:focus-within:ring-zinc-700/20 transition-all shadow-2xs">
               <textarea
                 ref={textareaRef}
                 id="prompt-textarea"
@@ -573,11 +623,11 @@ export default function App() {
                     ? 'Ask Victor a math problem (e.g. solve 3x + 12 = 45 or integrate x*e^x)...'
                     : 'Message Victor (e.g. chat, ask a question, brainstorm)...'
                 }
-                className="w-full resize-none bg-transparent px-4 pt-3 pb-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none min-h-[44px] max-h-[180px] leading-relaxed"
+                className="w-full resize-none bg-transparent px-4 pt-3 pb-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none min-h-[44px] max-h-[180px] leading-relaxed"
               />
 
               {/* Bottom bar of input */}
-              <div className="flex items-center justify-between px-3 py-2 border-t border-zinc-200/40 text-xs">
+              <div className="flex items-center justify-between px-3 py-2 border-t border-zinc-200/40 dark:border-zinc-800/80 text-xs">
                 {/* Secondary toolbar buttons */}
                 <div className="flex items-center gap-1">
                   <button
@@ -586,8 +636,8 @@ export default function App() {
                     onClick={() => setShowMathToolbar((prev) => !prev)}
                     className={`flex items-center gap-1 px-2 py-1 rounded-lg transition-colors text-[11px] ${
                       showMathToolbar || currentSession?.mode === 'math'
-                        ? 'bg-zinc-200 text-zinc-900 font-medium'
-                        : 'text-zinc-500 hover:text-zinc-800 hover:bg-zinc-200/60'
+                        ? 'bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800'
                     }`}
                     title="Toggle Math Keyboard Toolbar"
                   >
@@ -595,7 +645,7 @@ export default function App() {
                     <span>Math Symbols</span>
                   </button>
 
-                  <span className="text-[11px] text-zinc-400 hidden sm:inline ml-2">
+                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 hidden sm:inline ml-2">
                     Shift+Enter for new line
                   </span>
                 </div>
@@ -620,8 +670,8 @@ export default function App() {
                       onClick={() => sendMessage()}
                       className={`flex items-center justify-center w-8 h-8 rounded-xl transition-all shadow-xs ${
                         inputPrompt.trim()
-                          ? 'bg-zinc-900 text-white hover:bg-zinc-800 active:scale-95 cursor-pointer'
-                          : 'bg-zinc-200 text-zinc-400 cursor-not-allowed'
+                          ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:bg-zinc-800 dark:hover:bg-zinc-200 active:scale-95 cursor-pointer'
+                          : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-600 cursor-not-allowed'
                       }`}
                       title="Send message"
                     >
@@ -632,7 +682,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="mt-2 text-center text-[11px] text-zinc-500">
+            <div className="mt-2 text-center text-[11px] text-zinc-500 dark:text-zinc-400">
               Victor is powered by Gemini 3.8 Flash. Responses can be checked for accuracy.
             </div>
           </div>

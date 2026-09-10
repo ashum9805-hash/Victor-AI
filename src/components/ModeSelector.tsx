@@ -44,7 +44,7 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
   return (
     <div
       id="mode-selector"
-      className="inline-flex p-1 bg-zinc-100 rounded-xl border border-zinc-200/80 gap-1"
+      className="inline-flex p-1 bg-zinc-100 dark:bg-zinc-800/80 rounded-xl border border-zinc-200/80 dark:border-zinc-700/60 gap-1 transition-colors"
     >
       {MODES.map((mode) => {
         const Icon = mode.icon;
@@ -60,11 +60,11 @@ export const ModeSelector: React.FC<ModeSelectorProps> = ({
             title={mode.description}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
               isActive
-                ? 'bg-white text-zinc-900 shadow-xs font-semibold'
-                : 'text-zinc-600 hover:text-zinc-900 hover:bg-zinc-200/60'
+                ? 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white shadow-xs font-semibold'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200/60 dark:hover:bg-zinc-700/50'
             } ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}
           >
-            <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-zinc-900' : 'text-zinc-500'}`} />
+            <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-zinc-900 dark:text-zinc-100' : 'text-zinc-500 dark:text-zinc-400'}`} />
             <span className="whitespace-nowrap">{mode.title}</span>
           </button>
         );
