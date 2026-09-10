@@ -28,6 +28,7 @@ import { PromptSuggestions } from './components/PromptSuggestions';
 const STORAGE_KEY_SESSIONS = 'ai_assistant_sessions_v1';
 const STORAGE_KEY_CURRENT = 'ai_assistant_current_id_v1';
 const STORAGE_KEY_THEME = 'victor_theme_mode_v1';
+const MAX_SAVED_SESSIONS = 50;
 
 function createNewSession(mode: ChatMode = 'casual'): ChatSession {
   return {
@@ -40,6 +41,23 @@ function createNewSession(mode: ChatMode = 'casual'): ChatSession {
   };
 }
 
+// Helper to save sessions safely with quota management
+function safelyPersistSessions(sessions: ChatSession[]) {
+  try {
+    const capped = sessions.slice(0, MAX_SAVED_SESSIONS);
+    localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(capped));
+  } catch (err) {
+    console.warn('localStorage quota exceeded. Pruning older sessions...', err);
+    try {
+      // Retain only 20 newest sessions on storage error
+      const pruned = sessions.slice(0, 20);
+      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(pruned));
+    } catch {
+      // Quota completely exhausted, cannot persist
+    }
+  }
+}
+
 export default function App() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
     try {
@@ -47,7 +65,7 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return parsed.slice(0, MAX_SAVED_SESSIONS);
         }
       }
     } catch {
@@ -119,20 +137,44 @@ export default function App() {
     }
   }, [sessions, currentSessionId]);
 
-  // Persist sessions to localStorage
+  // Persist sessions to localStorage with bounding
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(sessions));
-      if (currentSessionId) {
+    safelyPersistSessions(sessions);
+    if (currentSessionId) {
+      try {
         localStorage.setItem(STORAGE_KEY_CURRENT, currentSessionId);
+      } catch {
+        // Ignore
       }
-    } catch {
-      // Ignore storage errors
     }
   }, [sessions, currentSessionId]);
 
   const currentSession =
     sessions.find((s) => s.id === currentSessionId) || sessions[0];
+
+  // Global Keyboard Shortcuts (Cmd+K / Ctrl+K for new chat, Esc to close modals)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+K or Cmd+K: New Chat
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        handleNewSession();
+      }
+      // Escape: Close sidebar or error banner
+      if (e.key === 'Escape') {
+        setIsSidebarOpen(false);
+        setErrorBanner(null);
+      }
+      // Ctrl+/ or Cmd+/: Focus chat textarea
+      if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        e.preventDefault();
+        textareaRef.current?.focus();
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   // Auto-scroll when messages update
   const scrollToBottom = () => {
@@ -388,26 +430,101 @@ export default function App() {
     }
   };
 
-  const handleRegenerate = () => {
-    if (isGenerating || currentSession.messages.length === 0) return;
-    const lastUserMessageIndex = [...currentSession.messages]
-      .reverse()
-      .findIndex((m) => m.role === 'user');
+  // Regenerate response at any specific assistant message
+  const handleRegenerateAt = (messageId: string) => {
+    if (isGenerating || !currentSession) return;
+    const targetIdx = currentSession.messages.findIndex((m) => m.id === messageId);
+    if (targetIdx === -1) return;
 
-    if (lastUserMessageIndex === -1) return;
-    const actualIndex =
-      currentSession.messages.length - 1 - lastUserMessageIndex;
-    const lastUserMessage = currentSession.messages[actualIndex];
+    // Find the user message preceding this message
+    let precedingUserIdx = -1;
+    for (let i = targetIdx - 1; i >= 0; i--) {
+      if (currentSession.messages[i].role === 'user') {
+        precedingUserIdx = i;
+        break;
+      }
+    }
 
-    // Remove any assistant responses after this user message
-    const trimmedMessages = currentSession.messages.slice(0, actualIndex);
+    if (precedingUserIdx === -1) return;
+    const userPrompt = currentSession.messages[precedingUserIdx].content;
+
+    // Truncate messages up to the user message
+    const trimmedMessages = currentSession.messages.slice(0, precedingUserIdx);
     setSessions((prev) =>
       prev.map((s) =>
         s.id === currentSessionId ? { ...s, messages: trimmedMessages } : s,
       ),
     );
 
-    sendMessage(lastUserMessage.content);
+    sendMessage(userPrompt);
+  };
+
+  // Edit an existing user message
+  const handleEditUserMessage = (content: string) => {
+    setInputPrompt(content);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(
+        textareaRef.current.scrollHeight,
+        200,
+      )}px`;
+    }
+  };
+
+  // Export current conversation to Markdown
+  const handleExportCurrentMarkdown = () => {
+    if (!currentSession || currentSession.messages.length === 0) {
+      alert('No messages to export in this conversation.');
+      return;
+    }
+
+    const title = currentSession.title || 'Victor Conversation';
+    const dateStr = new Date(currentSession.createdAt).toLocaleString();
+    let md = `# ${title}\n*Exported from Victor on ${dateStr}*\n\n---\n\n`;
+
+    for (const msg of currentSession.messages) {
+      const sender = msg.role === 'assistant' ? 'Victor' : 'You';
+      md += `### ${sender} (${new Date(msg.timestamp).toLocaleTimeString()})\n\n${msg.content}\n\n---\n\n`;
+    }
+
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const safeName = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30);
+    link.href = url;
+    link.download = `${safeName || 'conversation'}.md`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Backup all conversations as JSON
+  const handleExportAllJson = () => {
+    const jsonStr = JSON.stringify(sessions, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const dateStr = new Date().toISOString().split('T')[0];
+    link.href = url;
+    link.download = `victor-backup-${dateStr}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // Restore imported conversations
+  const handleImportSessions = (imported: ChatSession[]) => {
+    setSessions((prev) => {
+      const existingIds = new Set(prev.map((s) => s.id));
+      const newItems = imported.filter((s) => !existingIds.has(s.id));
+      return [...newItems, ...prev];
+    });
+    if (imported.length > 0) {
+      setCurrentSessionId(imported[0].id);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -426,6 +543,9 @@ export default function App() {
         onSelectSession={(id) => setCurrentSessionId(id)}
         onNewSession={() => handleNewSession()}
         onDeleteSession={handleDeleteSession}
+        onExportAllJson={handleExportAllJson}
+        onExportCurrentMarkdown={handleExportCurrentMarkdown}
+        onImportSessions={handleImportSessions}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
         theme={theme}
@@ -569,10 +689,10 @@ export default function App() {
                   : 'Ask questions, draft text, brainstorm ideas, or analyze information with fast answers from Victor.'}
               </p>
 
-              {/* Mobile friendly reminder note */}
+              {/* AI Status Badge */}
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300 text-xs mb-6">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Runs directly in the cloud. No Termux or phone setup required!</span>
+                <span>Powered by Gemini · Ready to assist</span>
               </div>
 
               {/* Quick suggestions */}
@@ -593,7 +713,8 @@ export default function App() {
                     key={message.id}
                     message={message}
                     isLatestAssistantMessage={isLatestAssistant}
-                    onRegenerate={handleRegenerate}
+                    onRegenerate={handleRegenerateAt}
+                    onEditUserMessage={handleEditUserMessage}
                   />
                 );
               })}
@@ -627,7 +748,7 @@ export default function App() {
             )}
 
             {/* Input area */}
-            <div className="relative flex flex-col rounded-2xl border border-zinc-300 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/80 focus-within:border-zinc-900 dark:focus-within:border-zinc-600 focus-within:bg-white dark:focus-within:bg-zinc-900 focus-within:ring-2 focus-within:ring-zinc-900/10 dark:focus-within:ring-zinc-700/20 transition-all shadow-2xs">
+            <div className="relative flex flex-col rounded-2xl border border-zinc-300 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/80 focus-within:border-zinc-900 dark:focus-within:border-zinc-600 focus-within:bg-white dark:focus-within:bg-zinc-900 focus-within:ring-2 focus-within:ring-zinc-900/10 dark:focus-within:ring-zinc-700/20 transition-all shadow-xs">
               <textarea
                 ref={textareaRef}
                 id="prompt-textarea"
@@ -650,8 +771,9 @@ export default function App() {
                   <button
                     type="button"
                     id="toggle-math-symbols-btn"
+                    aria-label="Toggle Math Keyboard Toolbar"
                     onClick={() => setShowMathToolbar((prev) => !prev)}
-                    className={`flex items-center gap-1 px-2 py-1 rounded-lg transition-colors text-[11px] ${
+                    className={`flex items-center gap-1 px-2 py-1 rounded-lg transition-colors text-[11px] cursor-pointer ${
                       showMathToolbar || currentSession?.mode === 'math'
                         ? 'bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium'
                         : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800'
@@ -663,7 +785,7 @@ export default function App() {
                   </button>
 
                   <span className="text-[11px] text-zinc-400 dark:text-zinc-500 hidden sm:inline ml-2">
-                    Shift+Enter for new line
+                    Shift+Enter for new line · Ctrl+K for new chat
                   </span>
                 </div>
 
@@ -673,6 +795,7 @@ export default function App() {
                     <button
                       id="stop-generation-btn"
                       type="button"
+                      aria-label="Stop generating response"
                       onClick={handleStopGeneration}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-medium text-xs shadow-xs transition-all active:scale-95 cursor-pointer"
                     >
@@ -683,6 +806,7 @@ export default function App() {
                     <button
                       id="send-message-btn"
                       type="button"
+                      aria-label="Send message to Victor"
                       disabled={!inputPrompt.trim()}
                       onClick={() => sendMessage()}
                       className={`flex items-center justify-center w-8 h-8 rounded-xl transition-all shadow-xs ${

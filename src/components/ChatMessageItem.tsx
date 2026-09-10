@@ -2,19 +2,20 @@ import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
-import { Copy, Check, RotateCcw, Bot, User, AlertCircle } from 'lucide-react';
+import { Copy, Check, RotateCcw, Bot, User, AlertCircle, Pencil } from 'lucide-react';
 import { ChatMessage } from '../types';
 
 interface ChatMessageItemProps {
   message: ChatMessage;
   isLatestAssistantMessage?: boolean;
-  onRegenerate?: () => void;
+  onRegenerate?: (messageId: string) => void;
+  onEditUserMessage?: (content: string) => void;
 }
 
 export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
   message,
-  isLatestAssistantMessage = false,
   onRegenerate,
+  onEditUserMessage,
 }) => {
   const [copied, setCopied] = useState(false);
   const isAssistant = message.role === 'assistant';
@@ -35,7 +36,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
       className={`flex gap-3 sm:gap-4 p-4 rounded-2xl transition-colors ${
         isAssistant
           ? 'bg-zinc-50/80 dark:bg-zinc-900/70 border border-zinc-200/60 dark:border-zinc-800'
-          : 'bg-white dark:bg-zinc-950'
+          : 'bg-white dark:bg-zinc-950 border border-transparent'
       }`}
     >
       {/* Avatar */}
@@ -55,7 +56,7 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
 
       {/* Content Area */}
       <div className="flex-1 min-w-0">
-        {/* Header with sender and copy action */}
+        {/* Header with sender and actions */}
         <div className="flex items-center justify-between gap-2 mb-1.5">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-xs text-zinc-900 dark:text-zinc-100">
@@ -75,12 +76,28 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
           </div>
 
           <div className="flex items-center gap-1 opacity-80 hover:opacity-100">
+            {/* User Edit Message */}
+            {!isAssistant && onEditUserMessage && (
+              <button
+                id={`edit-btn-${message.id}`}
+                type="button"
+                onClick={() => onEditUserMessage(message.content)}
+                title="Edit and resend"
+                aria-label="Edit and resend message"
+                className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            {/* Copy Button */}
             <button
               id={`copy-btn-${message.id}`}
               type="button"
               onClick={handleCopy}
               title="Copy text"
-              className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors"
+              aria-label="Copy message text"
+              className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
             >
               {copied ? (
                 <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
@@ -88,13 +105,16 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
                 <Copy className="w-3.5 h-3.5" />
               )}
             </button>
-            {isAssistant && isLatestAssistantMessage && onRegenerate && (
+
+            {/* Assistant Regenerate Button */}
+            {isAssistant && onRegenerate && message.content && !message.error && (
               <button
                 id={`retry-btn-${message.id}`}
                 type="button"
-                onClick={onRegenerate}
-                title="Regenerate response"
-                className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors"
+                onClick={() => onRegenerate(message.id)}
+                title="Regenerate this response"
+                aria-label="Regenerate this response"
+                className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
               </button>
