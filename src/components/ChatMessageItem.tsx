@@ -104,7 +104,7 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
             </button>
 
             {/* Assistant Regenerate Button */}
-            {isAssistant && onRegenerate && message.content && !message.error && (
+            {isAssistant && onRegenerate && (
               <button
                 id={`retry-btn-${message.id}`}
                 type="button"
@@ -121,9 +121,21 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
 
         {/* Message body */}
         {message.error ? (
-          <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400 text-sm bg-rose-50 dark:bg-rose-950/40 p-3 rounded-lg border border-rose-200 dark:border-rose-900/60">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{message.content}</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-rose-600 dark:text-rose-400 text-sm bg-rose-50 dark:bg-rose-950/40 p-3 rounded-lg border border-rose-200 dark:border-rose-900/60">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{message.content}</span>
+            </div>
+            {onRegenerate && (
+              <button
+                type="button"
+                onClick={() => onRegenerate(message.id)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-rose-100 hover:bg-rose-200 dark:bg-rose-900/60 dark:hover:bg-rose-800/80 text-xs font-medium text-rose-700 dark:text-rose-200 transition-colors shrink-0 w-fit cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Retry
+              </button>
+            )}
           </div>
         ) : isAssistant ? (
           <div className="prose prose-zinc dark:prose-invert max-w-none text-zinc-800 dark:text-zinc-200 text-sm sm:text-base leading-relaxed break-words">

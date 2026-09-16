@@ -14,28 +14,28 @@ interface Suggestion {
 
 const UNIFIED_SUGGESTIONS: Suggestion[] = [
   {
-    title: 'Math & Calculus',
-    prompt: 'Solve step-by-step: 2x² + 5x - 3 = 0, showing formulas and steps.',
-    icon: Calculator,
-    tag: 'Math Solver',
+    title: 'Explore an idea',
+    prompt: 'Explain quantum computing using an intuitive everyday analogy.',
+    icon: Lightbulb,
+    tag: 'Curiosity',
   },
   {
-    title: 'Code & Build',
+    title: 'Draft & create',
+    prompt: 'Help me draft an engaging introduction for an article on sustainable cities.',
+    icon: BookOpen,
+    tag: 'Writing',
+  },
+  {
+    title: 'Work through a problem',
+    prompt: 'Solve 2x² + 5x - 3 = 0, showing each step clearly.',
+    icon: Calculator,
+    tag: 'Problem Solving',
+  },
+  {
+    title: 'Code & logic',
     prompt: 'Write a clean Python function to parse and validate markdown tables.',
     icon: Code,
     tag: 'Coding',
-  },
-  {
-    title: 'Deep Discussion',
-    prompt: 'Explain quantum entanglement with a simple everyday metaphor.',
-    icon: Lightbulb,
-    tag: 'Knowledge',
-  },
-  {
-    title: 'Creative Brainstorm',
-    prompt: 'What are 3 unique, realistic project ideas that blend AI and education?',
-    icon: Compass,
-    tag: 'Creativity',
   },
 ];
 

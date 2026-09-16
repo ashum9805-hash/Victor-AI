@@ -18,6 +18,7 @@ export interface ChatSession {
   updatedAt: number;
   mode: ChatMode;
   messages: ChatMessage[];
+  greetingIndex?: number;
 }
 
 export interface MathSymbol {

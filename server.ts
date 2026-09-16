@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
@@ -9,8 +10,9 @@ dotenv.config();
 const app = express();
 const PORT = 3000;
 
-// Model configuration - configurable via environment variable
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+// Model configuration - primary is ultra-fast gemini-3.5-flash-lite (<600ms latency)
+const PRIMARY_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+const FALLBACK_MODELS = ["gemini-3-flash-preview"];
 
 // Startup validation check
 if (!process.env.GEMINI_API_KEY) {
@@ -20,7 +22,30 @@ if (!process.env.GEMINI_API_KEY) {
 }
 
 // Request size limit
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "5mb" }));
+
+// Server-side session storage for durable chat persistence
+const DATA_DIR = path.join(process.cwd(), "data");
+const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch {
+    // Ignore
+  }
+}
+
+let cachedSessions: any[] = [];
+try {
+  if (fs.existsSync(SESSIONS_FILE)) {
+    const raw = fs.readFileSync(SESSIONS_FILE, "utf-8");
+    cachedSessions = JSON.parse(raw);
+    if (!Array.isArray(cachedSessions)) cachedSessions = [];
+  }
+} catch (e) {
+  console.warn("Could not read sessions from file:", e);
+}
 
 // Standard CORS configuration
 app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -37,16 +62,15 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// Lightweight in-memory rate limiter to prevent abuse
+// Lightweight in-memory rate limiter with generous threshold
 interface RateLimitRecord {
   count: number;
   resetAt: number;
 }
 const rateLimitMap = new Map<string, RateLimitRecord>();
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 60; // 60 requests/minute per client
+const MAX_REQUESTS_PER_WINDOW = 150; // generous 150 requests/minute
 
-// Prune stale rate-limit records every 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [ip, record] of rateLimitMap.entries()) {
@@ -62,6 +86,10 @@ const rateLimiter = (req: Request, res: Response, next: NextFunction) => {
     req.socket.remoteAddress ||
     "unknown";
 
+  if (clientIp === "127.0.0.1" || clientIp === "::1" || clientIp === "localhost") {
+    return next();
+  }
+
   const now = Date.now();
   let record = rateLimitMap.get(clientIp);
 
@@ -74,7 +102,7 @@ const rateLimiter = (req: Request, res: Response, next: NextFunction) => {
   record.count += 1;
   if (record.count > MAX_REQUESTS_PER_WINDOW) {
     res.status(429).json({
-      error: "Rate limit exceeded. Please wait a moment before sending more messages.",
+      error: "Victor is handling high activity. Please wait a brief moment before sending your next message.",
     });
     return;
   }
@@ -82,8 +110,26 @@ const rateLimiter = (req: Request, res: Response, next: NextFunction) => {
   next();
 };
 
-// Apply rate limiter to API routes
+// Apply rate limiter to chat routes
 app.use("/api/chat", rateLimiter);
+
+// Sessions persistence endpoints
+app.get("/api/sessions", (_req: Request, res: Response) => {
+  res.json({ sessions: cachedSessions });
+});
+
+app.post("/api/sessions", (req: Request, res: Response) => {
+  const { sessions } = req.body;
+  if (Array.isArray(sessions)) {
+    cachedSessions = sessions.slice(0, 100);
+    try {
+      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(cachedSessions), "utf-8");
+    } catch (e) {
+      console.warn("Could not save sessions to file:", e);
+    }
+  }
+  res.json({ ok: true, count: cachedSessions.length });
+});
 
 // Initialize Google GenAI client lazily
 let aiClient: GoogleGenAI | null = null;
@@ -96,11 +142,6 @@ function getGenAI(): GoogleGenAI {
     }
     aiClient = new GoogleGenAI({
       apiKey: key,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
     });
   }
   return aiClient;
@@ -190,7 +231,8 @@ app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     service: "Victor AI",
-    model: GEMINI_MODEL,
+    primaryModel: PRIMARY_MODEL,
+    fallbackModels: FALLBACK_MODELS,
   });
 });
 
@@ -204,12 +246,17 @@ Your core capabilities and guidelines:
    - Avoid stiff, bureaucratic, or robotic boilerplate. Adapt flexibly to the user's topic and tone.
    - Excel at thoughtful discussions, storytelling, creative brainstorming, philosophical reflections, advice, and casual talk.
 
-2. Mathematical & STEM Problem-Solving:
+2. Document, Essay, & Report Writing:
+   - When requested to write essays, reports, research summaries, articles, proposals, or formal documents, produce thorough, beautifully structured, and compelling pieces.
+   - Utilize clear markdown formatting: title, executive summary / introduction, clear topical subheadings (##, ###), evidence-backed body arguments, and a thoughtful conclusion.
+   - Adapt voice seamlessly to the desired format (academic, professional business report, analytical review, creative essay, or comprehensive guide).
+
+3. Mathematical & STEM Problem-Solving:
    - When presented with mathematical problems (arithmetic, algebra, geometry, trigonometry, calculus, linear algebra, statistics, or word problems), automatically provide clear, step-by-step reasoning.
    - Render mathematical formulas, expressions, and equations using standard LaTeX notation ($...$ for inline equations, like $f'(x) = 2x$, and $$...$$ on its own line for display equations, like $$\\int x \\, dx = \\frac{x^2}{2} + C$$).
    - Clearly state the problem setup, show the logical steps, and highlight the final conclusion (e.g., **Final Answer:** $x = 5$).
 
-3. Coding, Technical, & General Knowledge:
+4. Coding, Technical, & Deep Analysis:
    - Write clean, modern, well-commented code blocks with syntax highlighting.
    - Provide comprehensive, well-structured summaries, study notes, guides, and analyses with clear markdown headings and bullet points.`;
 
@@ -219,6 +266,33 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
   math: VICTOR_SYSTEM_INSTRUCTION,
   general: VICTOR_SYSTEM_INSTRUCTION,
 };
+
+// Model selection helper with automated graceful fallback
+async function getActiveStream(contents: any[], systemInstruction: string) {
+  const modelsToTry = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+  const ai = getGenAI();
+  let lastError: unknown = null;
+
+  for (const model of modelsToTry) {
+    try {
+      const responseStream = await ai.models.generateContentStream({
+        model,
+        contents,
+        config: {
+          systemInstruction,
+        },
+      });
+      return { responseStream, model };
+    } catch (err: any) {
+      lastError = err;
+      console.warn(
+        `[Victor Model Fallback] Model ${model} failed (${err?.status || err?.message}). Trying next available model...`
+      );
+    }
+  }
+
+  throw lastError || new Error("All AI models are currently unavailable. Please try again.");
+}
 
 // Streaming Chat API endpoint
 app.post("/api/chat", async (req: Request, res: Response) => {
@@ -240,64 +314,58 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     parts: [{ text: m.content }],
   }));
 
-  // Enable immediate delivery (disable Nagle's algorithm)
+  // Enable immediate delivery
   req.socket?.setNoDelay(true);
   res.socket?.setNoDelay(true);
 
-  // Setup Server-Sent Events headers for immediate non-buffered streaming
+  // Setup Server-Sent Events headers
   res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // Disable proxy buffering (e.g. nginx / cloud run)
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders?.();
 
-  let isClosed = false;
-  req.on("close", () => {
-    isClosed = true;
+  // Track client abort correctly: res.on("close") when writable hasn't ended
+  let isAborted = false;
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      isAborted = true;
+    }
   });
 
-  // Set response timeout safeguard (60 seconds)
+  // Set response timeout safeguard (45 seconds)
   const timeoutId = setTimeout(() => {
-    if (!isClosed) {
-      res.write(`data: ${JSON.stringify({ error: "Request timed out after 60 seconds." })}\n\n`);
+    if (!isAborted && !res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ error: "Victor response timed out. Please retry your request." })}\n\n`);
       res.write("data: [DONE]\n\n");
       res.end();
     }
-  }, 60000);
+  }, 45000);
 
   try {
-    const ai = getGenAI();
-
-    const responseStream = await ai.models.generateContentStream({
-      model: GEMINI_MODEL,
-      contents,
-      config: {
-        systemInstruction: selectedInstruction,
-      },
-    });
+    const { responseStream, model } = await getActiveStream(contents, selectedInstruction);
 
     for await (const chunk of responseStream) {
-      if (isClosed) break;
+      if (isAborted || res.writableEnded) {
+        break;
+      }
       if (chunk.text) {
-        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
-        (res as any).flush?.();
+        res.write(`data: ${JSON.stringify({ text: chunk.text, model })}\n\n`);
       }
     }
 
     clearTimeout(timeoutId);
-    if (!isClosed) {
+    if (!isAborted && !res.writableEnded) {
       res.write("data: [DONE]\n\n");
-      (res as any).flush?.();
       res.end();
     }
   } catch (error: unknown) {
     clearTimeout(timeoutId);
-    if (!isClosed) {
-      console.error("Gemini API streaming error:", error);
+    if (!isAborted && !res.writableEnded) {
+      console.error("[Victor Chat] Streaming error:", error);
       const safeMessage = sanitizeErrorMessage(error);
       res.write(`data: ${JSON.stringify({ error: safeMessage })}\n\n`);
       res.write("data: [DONE]\n\n");
-      (res as any).flush?.();
       res.end();
     }
   }
@@ -323,22 +391,31 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
     parts: [{ text: m.content }],
   }));
 
-  try {
-    const ai = getGenAI();
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents,
-      config: {
-        systemInstruction: selectedInstruction,
-      },
-    });
+  const modelsToTry = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+  const ai = getGenAI();
+  let lastError: unknown = null;
 
-    res.json({ text: response.text || "" });
-  } catch (error: unknown) {
-    console.error("Gemini API sync error:", error);
-    const safeMessage = sanitizeErrorMessage(error);
-    res.status(500).json({ error: safeMessage });
+  for (const model of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction: selectedInstruction,
+        },
+      });
+
+      res.json({ text: response.text || "", model });
+      return;
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[Sync Fallback] Model ${model} failed:`, err?.message || err);
+    }
   }
+
+  console.error("Gemini API sync error:", lastError);
+  const safeMessage = sanitizeErrorMessage(lastError);
+  res.status(500).json({ error: safeMessage });
 });
 
 async function startServer() {
@@ -358,7 +435,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server listening on http://0.0.0.0:${PORT} [Model: ${GEMINI_MODEL}]`);
+    console.log(`Server listening on http://0.0.0.0:${PORT} [Primary Model: ${PRIMARY_MODEL}]`);
   });
 }
 

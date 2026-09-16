@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Send,
   Square,
@@ -29,7 +29,68 @@ const STORAGE_KEY_CURRENT = 'ai_assistant_current_id_v1';
 const STORAGE_KEY_THEME = 'victor_theme_mode_v1';
 const MAX_SAVED_SESSIONS = 50;
 
-function createNewSession(mode: ChatMode = 'casual'): ChatSession {
+export interface WelcomeGreeting {
+  headline: string;
+  subtitle: string;
+}
+
+export const WELCOME_GREETINGS: WelcomeGreeting[] = [
+  {
+    headline: "What's on your mind?",
+    subtitle: "Ask a question, brainstorm an idea, or start a new thread.",
+  },
+  {
+    headline: "Where should we begin?",
+    subtitle: "Explore a concept, work through a problem, or draft your thoughts.",
+  },
+  {
+    headline: "What are you curious about today?",
+    subtitle: "From quick questions to deep dives, let's explore it together.",
+  },
+  {
+    headline: "Ready when you are.",
+    subtitle: "Got a question, thought, or project you want to untangle?",
+  },
+  {
+    headline: "What would you like to explore?",
+    subtitle: "Bring your ideas, questions, or challenges to solve.",
+  },
+  {
+    headline: "How can I help today?",
+    subtitle: "Bounce ideas around, clarify complex topics, or create something new.",
+  },
+  {
+    headline: "What are we working on?",
+    subtitle: "Draft, analyze, calculate, or just chat through what's on your mind.",
+  },
+  {
+    headline: "Got a spark of an idea?",
+    subtitle: "Let's flesh it out, run through the details, and see where it leads.",
+  },
+];
+
+function getRandomGreetingIndex(excludeIndex?: number): number {
+  if (WELCOME_GREETINGS.length <= 1) return 0;
+  let idx: number;
+  do {
+    idx = Math.floor(Math.random() * WELCOME_GREETINGS.length);
+  } while (idx === excludeIndex);
+  return idx;
+}
+
+function getGreetingForSession(session?: ChatSession | null): WelcomeGreeting {
+  if (!session) return WELCOME_GREETINGS[0];
+  if (typeof session.greetingIndex === 'number') {
+    return WELCOME_GREETINGS[session.greetingIndex % WELCOME_GREETINGS.length];
+  }
+  let hash = 0;
+  for (let i = 0; i < session.id.length; i++) {
+    hash = (hash * 31 + session.id.charCodeAt(i)) & 0x7fffffff;
+  }
+  return WELCOME_GREETINGS[hash % WELCOME_GREETINGS.length];
+}
+
+function createNewSession(mode: ChatMode = 'casual', previousGreetingIndex?: number): ChatSession {
   return {
     id: 'session_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
     title: 'New conversation',
@@ -37,6 +98,7 @@ function createNewSession(mode: ChatMode = 'casual'): ChatSession {
     updatedAt: Date.now(),
     mode,
     messages: [],
+    greetingIndex: getRandomGreetingIndex(previousGreetingIndex),
   };
 }
 
@@ -76,7 +138,16 @@ export default function App() {
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => {
     try {
       const savedId = localStorage.getItem(STORAGE_KEY_CURRENT);
-      if (savedId) return savedId;
+      const saved = localStorage.getItem(STORAGE_KEY_SESSIONS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          if (savedId && parsed.some((s: any) => s.id === savedId)) {
+            return savedId;
+          }
+          return parsed[0].id;
+        }
+      }
     } catch {
       // Fallback
     }
@@ -123,7 +194,46 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Ensure current session id is valid
+  // Sync with server sessions on mount to guarantee chats persist across tab closes, new tabs, and incognito sessions
+  useEffect(() => {
+    let active = true;
+    const loadServerSessions = async () => {
+      try {
+        const res = await fetch('/api/sessions');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (active && Array.isArray(data.sessions) && data.sessions.length > 0) {
+          setSessions((localSessions) => {
+            const hasLocalMessages = localSessions.some((s) => s.messages.length > 0);
+            if (!hasLocalMessages) {
+              // Local is empty/clean, restore full history from server
+              safelyPersistSessions(data.sessions);
+              return data.sessions;
+            }
+            // Merge server and local without duplicate IDs
+            const localMap = new Map(localSessions.map((s) => [s.id, s]));
+            for (const serverS of data.sessions as ChatSession[]) {
+              if (!localMap.has(serverS.id)) {
+                localMap.set(serverS.id, serverS);
+              }
+            }
+            const merged = Array.from(localMap.values()).slice(0, MAX_SAVED_SESSIONS);
+            safelyPersistSessions(merged);
+            return merged;
+          });
+        }
+      } catch (err) {
+        console.warn('Could not sync sessions with server:', err);
+      }
+    };
+
+    loadServerSessions();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Ensure current session id is always valid
   useEffect(() => {
     if (!currentSessionId || !sessions.some((s) => s.id === currentSessionId)) {
       if (sessions.length > 0) {
@@ -136,7 +246,7 @@ export default function App() {
     }
   }, [sessions, currentSessionId]);
 
-  // Persist sessions to localStorage with bounding
+  // Persist sessions to both localStorage AND server whenever modified
   useEffect(() => {
     safelyPersistSessions(sessions);
     if (currentSessionId) {
@@ -146,6 +256,21 @@ export default function App() {
         // Ignore
       }
     }
+
+    // Debounced sync to server
+    const timer = setTimeout(() => {
+      if (sessions.length > 0 && sessions.some((s) => s.messages.length > 0)) {
+        fetch('/api/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessions: sessions.slice(0, MAX_SAVED_SESSIONS) }),
+        }).catch(() => {
+          // Background sync fail silent
+        });
+      }
+    }, 800);
+
+    return () => clearTimeout(timer);
   }, [sessions, currentSessionId]);
 
   const currentSession =
@@ -200,7 +325,7 @@ export default function App() {
     if (isGenerating) {
       handleStopGeneration();
     }
-    const fresh = createNewSession(mode);
+    const fresh = createNewSession(mode, currentSession?.greetingIndex);
     setSessions((prev) => [fresh, ...prev]);
     setCurrentSessionId(fresh.id);
     setInputPrompt('');
@@ -209,6 +334,18 @@ export default function App() {
       textareaRef.current.style.height = 'auto';
     }
   };
+
+  const handleShuffleGreeting = () => {
+    if (!currentSession || currentSession.messages.length > 0) return;
+    const nextIdx = getRandomGreetingIndex(currentSession.greetingIndex);
+    setSessions((prev) =>
+      prev.map((s) => (s.id === currentSession.id ? { ...s, greetingIndex: nextIdx } : s))
+    );
+  };
+
+  const currentGreeting = useMemo(() => {
+    return getGreetingForSession(currentSession);
+  }, [currentSession]);
 
   const handleDeleteSession = (id: string) => {
     setSessions((prev) => {
@@ -370,6 +507,8 @@ export default function App() {
         });
       };
 
+      let streamError: string | null = null;
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -390,7 +529,8 @@ export default function App() {
           try {
             const parsed = JSON.parse(dataContent);
             if (parsed.error) {
-              throw new Error(parsed.error);
+              streamError = parsed.error;
+              break;
             }
             if (parsed.text) {
               accumulatedText += parsed.text;
@@ -402,6 +542,14 @@ export default function App() {
             }
           }
         }
+
+        if (streamError) {
+          break;
+        }
+      }
+
+      if (streamError) {
+        throw new Error(streamError);
       }
 
       // Ensure final complete text is always flushed
@@ -410,6 +558,11 @@ export default function App() {
         rafId = null;
       }
       flushUpdate();
+
+      // Guard against silent empty stream
+      if (!accumulatedText.trim()) {
+        throw new Error("Victor was unable to complete the response. Please retry.");
+      }
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // User aborted intentionally
@@ -663,22 +816,33 @@ export default function App() {
           {currentSession?.messages.length === 0 ? (
             /* Empty state / Welcome screen */
             <div className="flex flex-col items-center justify-center text-center px-4 max-w-2xl mx-auto py-4 sm:py-8 my-auto">
-              <div className="w-14 h-14 rounded-2xl bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 flex items-center justify-center shadow-md mb-4">
-                <Sparkles className="w-7 h-7" />
+              <div className="w-12 h-12 rounded-2xl bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 flex items-center justify-center shadow-md mb-4">
+                <Sparkles className="w-6 h-6" />
               </div>
 
-              <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight mb-2">
-                Victor
-              </h1>
+              <div className="group relative inline-flex items-center justify-center gap-2 mb-2">
+                <h1 className="text-2xl sm:text-3xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
+                  {currentGreeting.headline}
+                </h1>
+                <button
+                  type="button"
+                  onClick={handleShuffleGreeting}
+                  title="Shuffle prompt"
+                  className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 rounded-md text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all cursor-pointer"
+                  aria-label="Shuffle greeting"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
-              <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-md mb-6 leading-relaxed">
-                Your personal AI assistant for intelligent discussions, step-by-step math solutions, coding, and creative problem solving.
+              <p className="text-sm sm:text-base text-zinc-600 dark:text-zinc-400 max-w-md mb-5 leading-relaxed">
+                {currentGreeting.subtitle}
               </p>
 
               {/* AI Status Badge */}
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300 text-xs mb-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300 text-xs mb-6">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Powered by Gemini · Ready to assist</span>
+                <span>Victor · Powered by Gemini</span>
               </div>
 
               {/* Quick suggestions */}
@@ -809,7 +973,7 @@ export default function App() {
             </div>
 
             <div className="mt-2 text-center text-[11px] text-zinc-500 dark:text-zinc-400">
-              Victor is powered by Gemini 3.8 Flash. Responses can be checked for accuracy.
+              Victor is powered by Gemini · Check responses for accuracy.
             </div>
           </div>
         </footer>
