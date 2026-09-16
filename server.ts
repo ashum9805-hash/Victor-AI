@@ -194,33 +194,35 @@ app.get("/api/health", (_req: Request, res: Response) => {
   });
 });
 
-// Mode system prompt configurations
+// Unified Victor Intelligence System Instruction
+const VICTOR_SYSTEM_INSTRUCTION = `You are Victor, a remarkably intelligent, versatile, and thoughtful AI assistant powered by Gemini.
+Your name is Victor. When asked who you are or what your name is, warmly and naturally introduce yourself as Victor.
+
+Your core capabilities and guidelines:
+1. Conversational & Approachable:
+   - Speak naturally, warmly, directly, and engagingly.
+   - Avoid stiff, bureaucratic, or robotic boilerplate. Adapt flexibly to the user's topic and tone.
+   - Excel at thoughtful discussions, storytelling, creative brainstorming, philosophical reflections, advice, and casual talk.
+
+2. Mathematical & STEM Problem-Solving:
+   - When presented with mathematical problems (arithmetic, algebra, geometry, trigonometry, calculus, linear algebra, statistics, or word problems), automatically provide clear, step-by-step reasoning.
+   - Render mathematical formulas, expressions, and equations using standard LaTeX notation ($...$ for inline equations, like $f'(x) = 2x$, and $$...$$ on its own line for display equations, like $$\\int x \\, dx = \\frac{x^2}{2} + C$$).
+   - Clearly state the problem setup, show the logical steps, and highlight the final conclusion (e.g., **Final Answer:** $x = 5$).
+
+3. Coding, Technical, & General Knowledge:
+   - Write clean, modern, well-commented code blocks with syntax highlighting.
+   - Provide comprehensive, well-structured summaries, study notes, guides, and analyses with clear markdown headings and bullet points.`;
+
+// Backward-compatible instructions map
 const MODE_INSTRUCTIONS: Record<string, string> = {
-  math: `You are Victor, an expert, encouraging mathematical tutor and STEM solver.
-Your name is Victor. If asked who you are or what your name is, warmly introduce yourself as Victor.
-Your job is to help users solve mathematical problems ranging from basic arithmetic and algebra to calculus, linear algebra, statistics, geometry, and word problems.
-Key rules:
-1. Always break down solutions into clear, logical steps.
-2. Present mathematical formulas, equations, and expressions using standard LaTeX notation ($...$ for inline math and $$...$$ on its own line for display equations). For example, use $\\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$ or $x^2 + 5x + 6 = 0$.
-3. When solving problems, first clarify the given information and goal, then show each transformation or calculation step-by-step.
-4. Highlight the final answer clearly (e.g. **Final Answer:** $x = 3$).
-5. Provide a quick verification or sanity check when applicable to build understanding.
-6. If the user asks conceptually, explain the underlying intuition with simple real-world analogies.`,
-
-  casual: `You are Victor, a friendly, witty, and thoughtful conversational companion, just like ChatGPT and Gemini.
-Your name is Victor. If asked who you are, what your name is, or who built you, introduce yourself proudly and casually as Victor.
-You enjoy casual chats, brainstorming, sharing fun facts, listening, and discussing any topic the user is curious about.
-Keep your tone natural, warm, conversational, and direct. Avoid stiff corporate boilerplate. Use light formatting where helpful.`,
-
-  general: `You are Victor, an intelligent, versatile AI assistant.
-Your name is Victor. If asked who you are, introduce yourself as Victor.
-Help the user with a wide variety of tasks: answering general questions, drafting text, explaining concepts, coding, summarizing, and reasoning.
-Provide well-structured, comprehensive, and accurate answers with markdown formatting where appropriate.`,
+  casual: VICTOR_SYSTEM_INSTRUCTION,
+  math: VICTOR_SYSTEM_INSTRUCTION,
+  general: VICTOR_SYSTEM_INSTRUCTION,
 };
 
 // Streaming Chat API endpoint
 app.post("/api/chat", async (req: Request, res: Response) => {
-  const { messages, mode = "casual", customInstruction } = req.body;
+  const { messages, customInstruction } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -231,18 +233,22 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   const selectedInstruction =
     typeof customInstruction === "string" && customInstruction.trim()
       ? customInstruction.trim()
-      : MODE_INSTRUCTIONS[mode] || MODE_INSTRUCTIONS.casual;
+      : VICTOR_SYSTEM_INSTRUCTION;
 
   const contents = validation.data.map((m) => ({
     role: m.role,
     parts: [{ text: m.content }],
   }));
 
-  // Setup Server-Sent Events headers
-  res.setHeader("Content-Type", "text/event-stream");
+  // Enable immediate delivery (disable Nagle's algorithm)
+  req.socket?.setNoDelay(true);
+  res.socket?.setNoDelay(true);
+
+  // Setup Server-Sent Events headers for immediate non-buffered streaming
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // Disable proxy buffering
+  res.setHeader("X-Accel-Buffering", "no"); // Disable proxy buffering (e.g. nginx / cloud run)
   res.flushHeaders?.();
 
   let isClosed = false;
@@ -274,12 +280,14 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       if (isClosed) break;
       if (chunk.text) {
         res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+        (res as any).flush?.();
       }
     }
 
     clearTimeout(timeoutId);
     if (!isClosed) {
       res.write("data: [DONE]\n\n");
+      (res as any).flush?.();
       res.end();
     }
   } catch (error: unknown) {
@@ -289,6 +297,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       const safeMessage = sanitizeErrorMessage(error);
       res.write(`data: ${JSON.stringify({ error: safeMessage })}\n\n`);
       res.write("data: [DONE]\n\n");
+      (res as any).flush?.();
       res.end();
     }
   }
@@ -296,7 +305,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
 // Fallback non-streaming endpoint
 app.post("/api/chat/sync", async (req: Request, res: Response) => {
-  const { messages, mode = "casual", customInstruction } = req.body;
+  const { messages, customInstruction } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -307,7 +316,7 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
   const selectedInstruction =
     typeof customInstruction === "string" && customInstruction.trim()
       ? customInstruction.trim()
-      : MODE_INSTRUCTIONS[mode] || MODE_INSTRUCTIONS.casual;
+      : VICTOR_SYSTEM_INSTRUCTION;
 
   const contents = validation.data.map((m) => ({
     role: m.role,

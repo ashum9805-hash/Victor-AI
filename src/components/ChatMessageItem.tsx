@@ -12,23 +12,20 @@ interface ChatMessageItemProps {
   onEditUserMessage?: (content: string) => void;
 }
 
-export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
-  message,
-  onRegenerate,
-  onEditUserMessage,
-}) => {
-  const [copied, setCopied] = useState(false);
-  const isAssistant = message.role === 'assistant';
+export const ChatMessageItem = React.memo<ChatMessageItemProps>(
+  ({ message, onRegenerate, onEditUserMessage }) => {
+    const [copied, setCopied] = useState(false);
+    const isAssistant = message.role === 'assistant';
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(message.content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
-    }
-  };
+    const handleCopy = async () => {
+      try {
+        await navigator.clipboard.writeText(message.content);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch {
+        // Fallback
+      }
+    };
 
   return (
     <div
@@ -199,4 +196,11 @@ export const ChatMessageItem: React.FC<ChatMessageItemProps> = ({
       </div>
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.message.error === nextProps.message.error &&
+    prevProps.isLatestAssistantMessage === nextProps.isLatestAssistantMessage
+  );
+});

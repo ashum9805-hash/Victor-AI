@@ -21,7 +21,6 @@ import {
 import { ChatMessage, ChatSession, ChatMode } from './types';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessageItem } from './components/ChatMessageItem';
-import { ModeSelector } from './components/ModeSelector';
 import { MathToolbar } from './components/MathToolbar';
 import { PromptSuggestions } from './components/PromptSuggestions';
 
@@ -226,15 +225,6 @@ export default function App() {
     });
   };
 
-  const handleModeChange = (newMode: ChatMode) => {
-    setSessions((prev) =>
-      prev.map((s) => (s.id === currentSessionId ? { ...s, mode: newMode } : s)),
-    );
-    if (newMode === 'math') {
-      setShowMathToolbar(true);
-    }
-  };
-
   const handleInsertMathSymbol = (snippet: string) => {
     if (!textareaRef.current) {
       setInputPrompt((prev) => prev + snippet);
@@ -347,6 +337,38 @@ export default function App() {
       const decoder = new TextDecoder('utf-8');
       let accumulatedText = '';
       let buffer = '';
+      let rafId: number | null = null;
+      let lastFlushedLength = 0;
+
+      // Batch state updates to 60fps display refresh instead of on every 2-character chunk
+      const flushUpdate = () => {
+        if (accumulatedText.length === lastFlushedLength) return;
+        lastFlushedLength = accumulatedText.length;
+        const currentText = accumulatedText;
+        setSessions((prev) =>
+          prev.map((s) => {
+            if (s.id === currentSessionId) {
+              return {
+                ...s,
+                messages: s.messages.map((m) =>
+                  m.id === assistantPlaceholderId
+                    ? { ...m, content: currentText }
+                    : m,
+                ),
+              };
+            }
+            return s;
+          }),
+        );
+      };
+
+      const scheduleFlush = () => {
+        if (rafId !== null) return;
+        rafId = requestAnimationFrame(() => {
+          rafId = null;
+          flushUpdate();
+        });
+      };
 
       while (true) {
         const { done, value } = await reader.read();
@@ -372,21 +394,7 @@ export default function App() {
             }
             if (parsed.text) {
               accumulatedText += parsed.text;
-              setSessions((prev) =>
-                prev.map((s) => {
-                  if (s.id === currentSessionId) {
-                    return {
-                      ...s,
-                      messages: s.messages.map((m) =>
-                        m.id === assistantPlaceholderId
-                          ? { ...m, content: accumulatedText }
-                          : m,
-                      ),
-                    };
-                  }
-                  return s;
-                }),
-              );
+              scheduleFlush();
             }
           } catch (e: any) {
             if (e.message && e.message !== 'Unexpected end of JSON input') {
@@ -395,6 +403,13 @@ export default function App() {
           }
         }
       }
+
+      // Ensure final complete text is always flushed
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      flushUpdate();
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // User aborted intentionally
@@ -580,16 +595,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* Controls: Mode Switcher, Dark/Light Toggle, New Chat */}
+          {/* Controls: Dark/Light Toggle, New Chat, Delete Chat */}
           <div className="flex items-center gap-1.5 sm:gap-2">
-            <div className="hidden sm:block">
-              <ModeSelector
-                currentMode={currentSession?.mode || 'casual'}
-                onSelectMode={handleModeChange}
-                disabled={isGenerating}
-              />
-            </div>
-
             {/* Dark / Light Theme Toggle Button */}
             <button
               id="header-theme-toggle"
@@ -634,15 +641,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* Mobile Mode Switcher row */}
-        <div className="sm:hidden shrink-0 px-3 py-2 border-b border-zinc-100 dark:border-zinc-800/80 bg-zinc-50 dark:bg-zinc-900 flex justify-center transition-colors">
-          <ModeSelector
-            currentMode={currentSession?.mode || 'casual'}
-            onSelectMode={handleModeChange}
-            disabled={isGenerating}
-          />
-        </div>
-
         {/* Error notification banner */}
         {errorBanner && (
           <div className="shrink-0 px-4 py-2 bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-center justify-between">
@@ -665,28 +663,16 @@ export default function App() {
           {currentSession?.messages.length === 0 ? (
             /* Empty state / Welcome screen */
             <div className="flex flex-col items-center justify-center text-center px-4 max-w-2xl mx-auto py-4 sm:py-8 my-auto">
-              <div className="w-14 h-14 rounded-2xl bg-zinc-900 dark:bg-zinc-800 text-white flex items-center justify-center shadow-md mb-4">
-                {currentSession.mode === 'math' ? (
-                  <Calculator className="w-7 h-7" />
-                ) : (
-                  <Sparkles className="w-7 h-7" />
-                )}
+              <div className="w-14 h-14 rounded-2xl bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 flex items-center justify-center shadow-md mb-4">
+                <Sparkles className="w-7 h-7" />
               </div>
 
               <h1 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-zinc-100 tracking-tight mb-2">
-                {currentSession.mode === 'math'
-                  ? 'Victor · Math Solver'
-                  : currentSession.mode === 'casual'
-                  ? 'Chat with Victor'
-                  : 'Victor · AI Assistant'}
+                Victor
               </h1>
 
               <p className="text-sm text-zinc-600 dark:text-zinc-400 max-w-md mb-6 leading-relaxed">
-                {currentSession.mode === 'math'
-                  ? 'Ask Victor equations, algebra, calculus, or word problems. Get clear step-by-step solutions with LaTeX formulas.'
-                  : currentSession.mode === 'casual'
-                  ? 'Chat naturally with Victor about anything on your mind, explore curiosities, or bounce ideas.'
-                  : 'Ask questions, draft text, brainstorm ideas, or analyze information with fast answers from Victor.'}
+                Your personal AI assistant for intelligent discussions, step-by-step math solutions, coding, and creative problem solving.
               </p>
 
               {/* AI Status Badge */}
@@ -697,7 +683,6 @@ export default function App() {
 
               {/* Quick suggestions */}
               <PromptSuggestions
-                mode={currentSession.mode}
                 onSelectPrompt={(prompt) => sendMessage(prompt)}
               />
             </div>

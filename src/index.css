@@ -12,11 +12,27 @@ body {
   overflow: hidden;
   -webkit-text-size-adjust: 100%;
   background-color: #ffffff;
+  transition: background-color 0.35s ease, color 0.35s ease;
 }
 
 html.dark,
 html.dark body {
   background-color: #09090b;
+}
+
+/* Smooth 0.35s theme transition on elements */
+.chat-app-root,
+.chat-view-container,
+header,
+main,
+aside,
+footer,
+div,
+button,
+textarea,
+span,
+p {
+  transition: background-color 0.35s ease, border-color 0.35s ease, color 0.35s ease;
 }
 
 #root {

@@ -1,9 +1,7 @@
 import React from 'react';
-import { ChatMode } from '../types';
-import { MessageSquare, Calculator, Lightbulb, Compass } from 'lucide-react';
+import { Calculator, Lightbulb, Compass, Code, BookOpen } from 'lucide-react';
 
 interface PromptSuggestionsProps {
-  mode: ChatMode;
   onSelectPrompt: (prompt: string) => void;
 }
 
@@ -14,78 +12,39 @@ interface Suggestion {
   tag: string;
 }
 
-const SUGGESTIONS: Record<ChatMode, Suggestion[]> = {
-  casual: [
-    {
-      title: 'Brainstorm ideas',
-      prompt: "What are some fun, creative weekend projects I can build on my phone or laptop?",
-      icon: Lightbulb,
-      tag: 'Creative',
-    },
-    {
-      title: 'Casual question',
-      prompt: "If you could visit any place in history for one afternoon, where would you go and why?",
-      icon: Compass,
-      tag: 'Discussion',
-    },
-    {
-      title: 'Quick recommendation',
-      prompt: "Give me 3 captivating sci-fi or mystery books that are hard to put down.",
-      icon: MessageSquare,
-      tag: 'Reading',
-    },
-  ],
-  math: [
-    {
-      title: 'Quadratic Equation',
-      prompt: "Solve step-by-step: 2x² + 5x - 3 = 0, and show the quadratic formula.",
-      icon: Calculator,
-      tag: 'Algebra',
-    },
-    {
-      title: 'Calculus derivative',
-      prompt: "Find the derivative of f(x) = (3x^2 + 1) * sin(x) using the product rule.",
-      icon: Calculator,
-      tag: 'Calculus',
-    },
-    {
-      title: 'Word problem',
-      prompt: "A train leaves City A at 60 mph. Two hours later, a faster train leaves City A at 90 mph on the same track. When will it catch up?",
-      icon: Calculator,
-      tag: 'Word Problem',
-    },
-  ],
-  general: [
-    {
-      title: 'Concept explanation',
-      prompt: "Explain how neural networks learn with a simple everyday metaphor.",
-      icon: Lightbulb,
-      tag: 'AI Concept',
-    },
-    {
-      title: 'Code assistance',
-      prompt: "Write a clean Python function to check if a word is a palindrome.",
-      icon: Compass,
-      tag: 'Programming',
-    },
-    {
-      title: 'Study guide',
-      prompt: "Summarize the key principles of Newton's 3 laws of motion with real-world examples.",
-      icon: MessageSquare,
-      tag: 'Physics',
-    },
-  ],
-};
+const UNIFIED_SUGGESTIONS: Suggestion[] = [
+  {
+    title: 'Math & Calculus',
+    prompt: 'Solve step-by-step: 2x² + 5x - 3 = 0, showing formulas and steps.',
+    icon: Calculator,
+    tag: 'Math Solver',
+  },
+  {
+    title: 'Code & Build',
+    prompt: 'Write a clean Python function to parse and validate markdown tables.',
+    icon: Code,
+    tag: 'Coding',
+  },
+  {
+    title: 'Deep Discussion',
+    prompt: 'Explain quantum entanglement with a simple everyday metaphor.',
+    icon: Lightbulb,
+    tag: 'Knowledge',
+  },
+  {
+    title: 'Creative Brainstorm',
+    prompt: 'What are 3 unique, realistic project ideas that blend AI and education?',
+    icon: Compass,
+    tag: 'Creativity',
+  },
+];
 
 export const PromptSuggestions: React.FC<PromptSuggestionsProps> = ({
-  mode,
   onSelectPrompt,
 }) => {
-  const list = SUGGESTIONS[mode] || SUGGESTIONS.casual;
-
   return (
-    <div id="prompt-suggestions" className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 w-full max-w-2xl mx-auto my-4">
-      {list.map((item, idx) => {
+    <div id="prompt-suggestions" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 w-full max-w-3xl mx-auto my-4">
+      {UNIFIED_SUGGESTIONS.map((item, idx) => {
         const Icon = item.icon;
         return (
           <button
