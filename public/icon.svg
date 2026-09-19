@@ -1,0 +1,9 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+    <rect width="512" height="512" rx="112.64" fill="#09090b"/>
+    <circle cx="256" cy="256" r="194.56" stroke="#27272a" stroke-width="10.24" fill="none"/>
+    <circle cx="256" cy="256" r="153.6" stroke="#06b6d4" stroke-width="7.68" stroke-dasharray="30.72 20.48" fill="none" opacity="0.8"/>
+    <!-- V monogram -->
+    <path d="M 179.2 174.08 L 256 348.16 L 332.8 174.08" 
+          stroke="#f4f4f5" stroke-width="30.72" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="256" cy="153.6" r="15.36" fill="#06b6d4"/>
+  </svg>

@@ -13,8 +13,11 @@ import {
   Download,
   Upload,
   FileText,
+  Volume2,
+  Brain,
 } from 'lucide-react';
 import { ChatSession } from '../types';
+import { getStoredVoicePersona, getStoredSpeakingStyle, VOICE_PERSONAS } from '../utils/voiceService';
 
 interface SidebarProps {
   sessions: ChatSession[];
@@ -29,6 +32,8 @@ interface SidebarProps {
   onClose: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  onOpenVoiceSettings?: () => void;
+  onOpenPersonalization?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -44,6 +49,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onClose,
   theme,
   onToggleTheme,
+  onOpenVoiceSettings,
+  onOpenPersonalization,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -260,7 +267,41 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Mobile & Cloud information note & Theme Toggle */}
-        <div className="p-3 border-t border-zinc-800 text-xs bg-zinc-950/50 space-y-2.5">
+        <div className="p-3 border-t border-zinc-800 text-xs bg-zinc-950/50 space-y-2">
+          {onOpenPersonalization && (
+            <button
+              type="button"
+              id="sidebar-personalization-btn"
+              onClick={onOpenPersonalization}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs"
+            >
+              <span className="flex items-center gap-2">
+                <Brain className="w-3.5 h-3.5 text-purple-400" />
+                <span>Memory & Context</span>
+              </span>
+              <span className="text-[11px] font-medium text-purple-400 bg-purple-950/60 border border-purple-800/60 px-2 py-0.5 rounded-md">
+                Personalized
+              </span>
+            </button>
+          )}
+
+          {onOpenVoiceSettings && (
+            <button
+              type="button"
+              id="sidebar-voice-settings-btn"
+              onClick={onOpenVoiceSettings}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs"
+            >
+              <span className="flex items-center gap-2">
+                <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Voice & Speech</span>
+              </span>
+              <span className="text-[11px] font-medium text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 px-2 py-0.5 rounded-md capitalize">
+                {VOICE_PERSONAS[getStoredVoicePersona()]?.name || 'Breeze'} · {getStoredSpeakingStyle() === 'conversational' ? 'Casual' : 'Full'}
+              </span>
+            </button>
+          )}
+
           <button
             type="button"
             id="sidebar-theme-toggle"

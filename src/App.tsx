@@ -8,7 +8,6 @@ import {
   Send,
   Square,
   Menu,
-  Plus,
   Calculator,
   Sparkles,
   Bot,
@@ -16,18 +15,78 @@ import {
   SlidersHorizontal,
   Sun,
   Moon,
-  Trash2,
+  Mic,
+  MicOff,
+  CheckSquare,
+  Radio,
+  Download,
 } from 'lucide-react';
-import { ChatMessage, ChatSession, ChatMode } from './types';
+import {
+  ChatMessage,
+  ChatSession,
+  ChatMode,
+  UserTask,
+  ActionExecution,
+  CodeExecutionInfo,
+} from './types';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessageItem } from './components/ChatMessageItem';
 import { MathToolbar } from './components/MathToolbar';
 import { PromptSuggestions } from './components/PromptSuggestions';
+import { TaskDrawer } from './components/TaskDrawer';
+import { JarvisLiveModal } from './components/JarvisLiveModal';
+import { PWAInstallBanner } from './components/PWAInstallBanner';
+import { VoiceSettingsModal } from './components/VoiceSettingsModal';
+import { parseActionsFromContent } from './utils/actionParser';
+import {
+  startSpeechRecognition,
+  stopSpeechRecognition,
+  isSpeechRecognitionSupported,
+} from './utils/voiceService';
 
 const STORAGE_KEY_SESSIONS = 'ai_assistant_sessions_v1';
 const STORAGE_KEY_CURRENT = 'ai_assistant_current_id_v1';
 const STORAGE_KEY_THEME = 'victor_theme_mode_v1';
+const STORAGE_KEY_TASKS = 'victor_tasks_v1';
 const MAX_SAVED_SESSIONS = 50;
+
+const DEFAULT_TASKS: UserTask[] = [
+  {
+    id: 'task_uchicago_rd',
+    title: 'UChicago RD Application (Common App & Supplements)',
+    category: 'college',
+    priority: 'high',
+    dueDate: 'Jan 2',
+    completed: false,
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 2,
+  },
+  {
+    id: 'task_kaist_intl',
+    title: 'KAIST International Application Profile & Document Check',
+    category: 'college',
+    priority: 'high',
+    dueDate: 'Jan 15',
+    completed: false,
+    createdAt: Date.now() - 1000 * 60 * 60 * 24,
+  },
+  {
+    id: 'task_py_fcc',
+    title: 'freeCodeCamp Python Track: Data Structures & Algorithms',
+    category: 'code',
+    priority: 'high',
+    completed: false,
+    createdAt: Date.now() - 1000 * 60 * 60 * 12,
+  },
+  {
+    id: 'task_victor_pwa',
+    title: 'Victor-AI PWA & Jarvis Autonomous Engine Deployment',
+    category: 'code',
+    priority: 'high',
+    completed: true,
+    createdAt: Date.now() - 1000 * 60 * 60 * 5,
+    completedAt: Date.now(),
+  },
+];
 
 export interface WelcomeGreeting {
   headline: string;
@@ -160,6 +219,26 @@ export default function App() {
   const [showMathToolbar, setShowMathToolbar] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
+  // Jarvis Missions & Tasks State
+  const [tasks, setTasks] = useState<UserTask[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY_TASKS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // Fallback
+    }
+    return DEFAULT_TASKS;
+  });
+
+  const [isTaskDrawerOpen, setIsTaskDrawerOpen] = useState(false);
+  const [isLiveModalOpen, setIsLiveModalOpen] = useState(false);
+  const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
+  const [isMicListening, setIsMicListening] = useState(false);
+  const speechStopRef = useRef<(() => void) | null>(null);
+
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
       const savedTheme = localStorage.getItem(STORAGE_KEY_THEME);
@@ -232,6 +311,117 @@ export default function App() {
       active = false;
     };
   }, []);
+
+  // Sync tasks with server on mount
+  useEffect(() => {
+    let active = true;
+    const loadTasks = async () => {
+      try {
+        const res = await fetch('/api/tasks');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (active && Array.isArray(data.tasks) && data.tasks.length > 0) {
+          setTasks(data.tasks);
+          try {
+            localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(data.tasks));
+          } catch {
+            // Ignore
+          }
+        }
+      } catch (e) {
+        console.warn('Could not sync tasks from server:', e);
+      }
+    };
+    loadTasks();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const persistTasks = (newTasks: UserTask[]) => {
+    setTasks(newTasks);
+    try {
+      localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(newTasks));
+    } catch {
+      // Ignore
+    }
+    fetch('/api/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tasks: newTasks }),
+    }).catch((e) => console.warn('Could not save tasks to server:', e));
+  };
+
+  const handleAddTask = (newTask: Omit<UserTask, 'id' | 'createdAt' | 'completed'>) => {
+    const task: UserTask = {
+      ...newTask,
+      id: 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      createdAt: Date.now(),
+      completed: false,
+    };
+    persistTasks([task, ...tasks]);
+  };
+
+  const handleToggleTask = (id: string) => {
+    const updated = tasks.map((t) =>
+      t.id === id ? { ...t, completed: !t.completed, completedAt: !t.completed ? Date.now() : undefined } : t
+    );
+    persistTasks(updated);
+  };
+
+  const handleDeleteTask = (id: string) => {
+    const updated = tasks.filter((t) => t.id !== id);
+    persistTasks(updated);
+  };
+
+  const handleClearCompleted = () => {
+    const updated = tasks.filter((t) => !t.completed);
+    persistTasks(updated);
+  };
+
+  const executeActions = (actions: ActionExecution[]) => {
+    if (!actions || actions.length === 0) return;
+    setTasks((prev) => {
+      let current = [...prev];
+      for (const act of actions) {
+        if (act.type === 'add_task' && act.title) {
+          const newTask: UserTask = {
+            id: 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            title: act.title,
+            category: act.category || 'general',
+            priority: act.priority || 'medium',
+            dueDate: act.dueDate,
+            completed: false,
+            createdAt: Date.now(),
+          };
+          current = [newTask, ...current];
+        } else if (act.type === 'complete_task' && act.title) {
+          const kw = act.title.toLowerCase();
+          current = current.map((t) =>
+            t.title.toLowerCase().includes(kw)
+              ? { ...t, completed: true, completedAt: Date.now() }
+              : t
+          );
+        } else if (act.type === 'delete_task' && act.title) {
+          const kw = act.title.toLowerCase();
+          current = current.filter((t) => !t.title.toLowerCase().includes(kw));
+        } else if (act.type === 'set_theme' && act.theme) {
+          setTheme(act.theme);
+        }
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(current));
+        fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tasks: current }),
+        }).catch(() => {});
+      } catch {
+        // Ignore
+      }
+      return current;
+    });
+  };
 
   // Ensure current session id is always valid
   useEffect(() => {
@@ -473,6 +663,7 @@ export default function App() {
 
       const decoder = new TextDecoder('utf-8');
       let accumulatedText = '';
+      let accumulatedCodeExecutions: CodeExecutionInfo[] = [];
       let buffer = '';
       let rafId: number | null = null;
       let lastFlushedLength = 0;
@@ -489,7 +680,14 @@ export default function App() {
                 ...s,
                 messages: s.messages.map((m) =>
                   m.id === assistantPlaceholderId
-                    ? { ...m, content: currentText }
+                    ? {
+                        ...m,
+                        content: currentText,
+                        codeExecutions:
+                          accumulatedCodeExecutions.length > 0
+                            ? [...accumulatedCodeExecutions]
+                            : undefined,
+                      }
                     : m,
                 ),
               };
@@ -536,6 +734,22 @@ export default function App() {
               accumulatedText += parsed.text;
               scheduleFlush();
             }
+            if (parsed.executableCode) {
+              accumulatedCodeExecutions.push({
+                language: parsed.executableCode.language || 'python',
+                code: parsed.executableCode.code || '',
+              });
+              scheduleFlush();
+            }
+            if (parsed.codeExecutionResult) {
+              if (accumulatedCodeExecutions.length > 0) {
+                const last =
+                  accumulatedCodeExecutions[accumulatedCodeExecutions.length - 1];
+                last.outcome = parsed.codeExecutionResult.outcome;
+                last.output = parsed.codeExecutionResult.output;
+              }
+              scheduleFlush();
+            }
           } catch (e: any) {
             if (e.message && e.message !== 'Unexpected end of JSON input') {
               console.warn('Error parsing stream event', e);
@@ -563,6 +777,37 @@ export default function App() {
       if (!accumulatedText.trim()) {
         throw new Error("Victor was unable to complete the response. Please retry.");
       }
+
+      // Parse and execute Jarvis Actions
+      const { actions } = parseActionsFromContent(accumulatedText);
+      if (actions.length > 0) {
+        executeActions(actions);
+      }
+
+      // Finalize message state with actions and code execution
+      setSessions((prev) =>
+        prev.map((s) => {
+          if (s.id === currentSessionId) {
+            return {
+              ...s,
+              messages: s.messages.map((m) =>
+                m.id === assistantPlaceholderId
+                  ? {
+                      ...m,
+                      content: accumulatedText,
+                      actions: actions.length > 0 ? actions : undefined,
+                      codeExecutions:
+                        accumulatedCodeExecutions.length > 0
+                          ? accumulatedCodeExecutions
+                          : undefined,
+                    }
+                  : m,
+              ),
+            };
+          }
+          return s;
+        }),
+      );
     } catch (err: any) {
       if (err.name === 'AbortError') {
         // User aborted intentionally
@@ -683,6 +928,94 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  // Live Mode Voice Query Handler for JarvisLiveModal
+  const handleLiveQuery = async (query: string): Promise<string> => {
+    const userMessage: ChatMessage = {
+      id: 'msg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      role: 'user',
+      content: query,
+      timestamp: Date.now(),
+    };
+    const updatedMessages = [...(currentSession?.messages || []), userMessage];
+
+    const res = await fetch('/api/chat/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: updatedMessages.map((m) => ({ role: m.role, content: m.content })),
+      }),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || 'Could not get response from Victor');
+    }
+
+    const data = await res.json();
+    const replyText = data.text || '';
+    const { cleanContent, actions } = parseActionsFromContent(replyText);
+
+    if (actions.length > 0) {
+      executeActions(actions);
+    }
+
+    const asstMessage: ChatMessage = {
+      id: 'msg_' + (Date.now() + 1) + '_' + Math.random().toString(36).substring(2, 6),
+      role: 'assistant',
+      content: replyText,
+      timestamp: Date.now(),
+      actions: actions.length > 0 ? actions : undefined,
+    };
+
+    setSessions((prev) =>
+      prev.map((s) => {
+        if (s.id === currentSessionId) {
+          return {
+            ...s,
+            updatedAt: Date.now(),
+            messages: [...updatedMessages, asstMessage],
+          };
+        }
+        return s;
+      }),
+    );
+
+    return cleanContent || replyText;
+  };
+
+  // Speech-to-text input toggle for textarea
+  const handleToggleMicInput = () => {
+    if (isMicListening) {
+      if (speechStopRef.current) {
+        speechStopRef.current();
+        speechStopRef.current = null;
+      }
+      stopSpeechRecognition();
+      setIsMicListening(false);
+    } else {
+      if (!isSpeechRecognitionSupported()) {
+        setErrorBanner('Speech recognition is not supported in this browser. Please use Chrome or Safari.');
+        return;
+      }
+      setIsMicListening(true);
+      const stopFn = startSpeechRecognition({
+        onTranscript: (finalText) => {
+          setInputPrompt((prev) => (prev ? prev + ' ' + finalText : finalText));
+        },
+        onEnd: () => {
+          setIsMicListening(false);
+          speechStopRef.current = null;
+        },
+        onError: (err) => {
+          console.warn('Speech error:', err);
+          setIsMicListening(false);
+          speechStopRef.current = null;
+        },
+      });
+      speechStopRef.current = stopFn;
+    }
+  };
+
   // Restore imported conversations
   const handleImportSessions = (imported: ChatSession[]) => {
     setSessions((prev) => {
@@ -718,6 +1051,7 @@ export default function App() {
         onClose={() => setIsSidebarOpen(false)}
         theme={theme}
         onToggleTheme={toggleTheme}
+        onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
       />
 
       {/* Main chat view */}
@@ -748,48 +1082,56 @@ export default function App() {
             </div>
           </div>
 
-          {/* Controls: Dark/Light Toggle, New Chat, Delete Chat */}
+          {/* Controls: Live Voice, Missions, Theme Toggle */}
           <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Live Voice Button */}
+            <button
+              id="header-live-voice-btn"
+              type="button"
+              onClick={() => setIsLiveModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30 text-xs font-medium active:scale-95 transition-all cursor-pointer shadow-xs"
+              title="Open Live Voice Conversation"
+            >
+              <Radio className="w-3.5 h-3.5 animate-pulse text-cyan-500" />
+              <span>Live Voice</span>
+            </button>
+
+            {/* Mission Board & Tasks Button */}
+            {(() => {
+              const pendingCount = tasks.filter((t) => !t.completed).length;
+              return (
+                <button
+                  id="header-tasks-btn"
+                  type="button"
+                  onClick={() => setIsTaskDrawerOpen(true)}
+                  className="relative flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 active:scale-95 text-xs font-medium text-zinc-800 dark:text-zinc-200 transition-all cursor-pointer"
+                  title="Open Missions & Tasks"
+                >
+                  <CheckSquare className="w-3.5 h-3.5 text-indigo-500" />
+                  <span className="hidden sm:inline">Missions</span>
+                  {pendingCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-indigo-600 text-[10px] font-bold text-white leading-none">
+                      {pendingCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })()}
+
             {/* Dark / Light Theme Toggle Button */}
             <button
               id="header-theme-toggle"
               type="button"
               onClick={toggleTheme}
               className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 hover:bg-zinc-200 dark:hover:bg-zinc-700/80 text-zinc-700 dark:text-zinc-300 active:scale-95 transition-all cursor-pointer"
-              title={theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode (easier at night)'}
+              title={theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode'}
+              aria-label={theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode'}
             >
               {theme === 'dark' ? (
                 <Sun className="w-4 h-4 text-amber-400" />
               ) : (
                 <Moon className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
               )}
-            </button>
-
-            <button
-              id="header-new-chat-btn"
-              type="button"
-              onClick={() => handleNewSession()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 active:scale-95 text-xs font-medium text-zinc-800 dark:text-zinc-200 transition-all cursor-pointer"
-              title="Start a new chat session"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline">New Chat</span>
-            </button>
-
-            {/* Delete current chat button */}
-            <button
-              id="header-delete-chat-btn"
-              type="button"
-              onClick={() => {
-                if (currentSession) {
-                  handleDeleteSession(currentSession.id);
-                }
-              }}
-              className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 hover:bg-rose-100 dark:hover:bg-rose-950/50 hover:text-rose-600 dark:hover:text-rose-400 text-zinc-600 dark:text-zinc-400 active:scale-95 transition-all cursor-pointer"
-              title="Delete this conversation"
-              aria-label="Delete this conversation"
-            >
-              <Trash2 className="w-4 h-4" />
             </button>
           </div>
         </header>
@@ -938,8 +1280,23 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* Send / Stop button */}
-                <div>
+                {/* Voice Input & Send / Stop button */}
+                <div className="flex items-center gap-1.5">
+                  <button
+                    id="mic-speech-input-btn"
+                    type="button"
+                    aria-label={isMicListening ? 'Stop listening voice' : 'Dictate with voice'}
+                    onClick={handleToggleMicInput}
+                    className={`flex items-center justify-center w-8 h-8 rounded-xl transition-all cursor-pointer ${
+                      isMicListening
+                        ? 'bg-rose-500 text-white animate-pulse shadow-md'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200/60 dark:hover:bg-zinc-800'
+                    }`}
+                    title={isMicListening ? 'Listening... click to stop' : 'Voice dictation (Speech-to-text)'}
+                  >
+                    {isMicListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  </button>
+
                   {isGenerating ? (
                     <button
                       id="stop-generation-btn"
@@ -978,6 +1335,33 @@ export default function App() {
           </div>
         </footer>
       </div>
+
+      {/* PWA Install Banner */}
+      <PWAInstallBanner />
+
+      {/* Jarvis Missions & Task Drawer */}
+      <TaskDrawer
+        isOpen={isTaskDrawerOpen}
+        onClose={() => setIsTaskDrawerOpen(false)}
+        tasks={tasks}
+        onToggleTask={handleToggleTask}
+        onDeleteTask={handleDeleteTask}
+        onAddTask={handleAddTask}
+        onClearCompleted={handleClearCompleted}
+      />
+
+      {/* Jarvis Full-Screen Live Voice HUD Modal */}
+      <JarvisLiveModal
+        isOpen={isLiveModalOpen}
+        onClose={() => setIsLiveModalOpen(false)}
+        onSendMessage={handleLiveQuery}
+      />
+
+      {/* Voice & Conversational Speech Settings Modal */}
+      <VoiceSettingsModal
+        isOpen={isVoiceSettingsOpen}
+        onClose={() => setIsVoiceSettingsOpen(false)}
+      />
     </div>
   );
 }

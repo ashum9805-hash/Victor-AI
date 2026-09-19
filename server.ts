@@ -1,13 +1,16 @@
 import express, { Request, Response, NextFunction } from "express";
+import http from "http";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI } from "@google/genai";
+import { WebSocketServer, WebSocket } from "ws";
+import { GoogleGenAI, Modality, LiveServerMessage } from "@google/genai";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const app = express();
+const server = http.createServer(app);
 const PORT = 3000;
 
 // Model configuration - primary is ultra-fast gemini-3.5-flash-lite (<600ms latency)
@@ -24,9 +27,10 @@ if (!process.env.GEMINI_API_KEY) {
 // Request size limit
 app.use(express.json({ limit: "5mb" }));
 
-// Server-side session storage for durable chat persistence
+// Server-side session & task storage (Scoped per client device for privacy)
 const DATA_DIR = path.join(process.cwd(), "data");
-const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+const SESSIONS_FILE = path.join(DATA_DIR, "user_sessions.json");
+const TASKS_FILE = path.join(DATA_DIR, "user_tasks.json");
 
 if (!fs.existsSync(DATA_DIR)) {
   try {
@@ -36,15 +40,37 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-let cachedSessions: any[] = [];
+interface ScopedStore {
+  [clientId: string]: any[];
+}
+
+let scopedSessions: ScopedStore = {};
 try {
   if (fs.existsSync(SESSIONS_FILE)) {
     const raw = fs.readFileSync(SESSIONS_FILE, "utf-8");
-    cachedSessions = JSON.parse(raw);
-    if (!Array.isArray(cachedSessions)) cachedSessions = [];
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") scopedSessions = parsed;
   }
 } catch (e) {
-  console.warn("Could not read sessions from file:", e);
+  console.warn("Could not read scoped sessions from file:", e);
+}
+
+let scopedTasks: ScopedStore = {};
+try {
+  if (fs.existsSync(TASKS_FILE)) {
+    const raw = fs.readFileSync(TASKS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") scopedTasks = parsed;
+  }
+} catch (e) {
+  console.warn("Could not read scoped tasks from file:", e);
+}
+
+function getSafeClientId(req: Request): string {
+  const headerId = (req.headers["x-client-id"] as string)?.trim();
+  const queryId = (req.query.clientId as string)?.trim();
+  const rawId = headerId || queryId || "default";
+  return rawId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
 }
 
 // Standard CORS configuration
@@ -113,22 +139,44 @@ const rateLimiter = (req: Request, res: Response, next: NextFunction) => {
 // Apply rate limiter to chat routes
 app.use("/api/chat", rateLimiter);
 
-// Sessions persistence endpoints
-app.get("/api/sessions", (_req: Request, res: Response) => {
-  res.json({ sessions: cachedSessions });
+// Sessions persistence endpoints (Scoped per client)
+app.get("/api/sessions", (req: Request, res: Response) => {
+  const clientId = getSafeClientId(req);
+  res.json({ sessions: scopedSessions[clientId] || [] });
 });
 
 app.post("/api/sessions", (req: Request, res: Response) => {
+  const clientId = getSafeClientId(req);
   const { sessions } = req.body;
   if (Array.isArray(sessions)) {
-    cachedSessions = sessions.slice(0, 100);
+    scopedSessions[clientId] = sessions.slice(0, 100);
     try {
-      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(cachedSessions), "utf-8");
+      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(scopedSessions), "utf-8");
     } catch (e) {
-      console.warn("Could not save sessions to file:", e);
+      console.warn("Could not save scoped sessions to file:", e);
     }
   }
-  res.json({ ok: true, count: cachedSessions.length });
+  res.json({ ok: true, count: (scopedSessions[clientId] || []).length });
+});
+
+// Tasks persistence endpoints (Scoped per client)
+app.get("/api/tasks", (req: Request, res: Response) => {
+  const clientId = getSafeClientId(req);
+  res.json({ tasks: scopedTasks[clientId] || [] });
+});
+
+app.post("/api/tasks", (req: Request, res: Response) => {
+  const clientId = getSafeClientId(req);
+  const { tasks } = req.body;
+  if (Array.isArray(tasks)) {
+    scopedTasks[clientId] = tasks.slice(0, 200);
+    try {
+      fs.writeFileSync(TASKS_FILE, JSON.stringify(scopedTasks, null, 2), "utf-8");
+    } catch (e) {
+      console.warn("Could not save scoped tasks to file:", e);
+    }
+  }
+  res.json({ ok: true, count: (scopedTasks[clientId] || []).length });
 });
 
 // Initialize Google GenAI client lazily
@@ -237,28 +285,43 @@ app.get("/api/health", (_req: Request, res: Response) => {
 });
 
 // Unified Victor Intelligence System Instruction
-const VICTOR_SYSTEM_INSTRUCTION = `You are Victor, a remarkably intelligent, versatile, and thoughtful AI assistant powered by Gemini.
-Your name is Victor. When asked who you are or what your name is, warmly and naturally introduce yourself as Victor.
+const VICTOR_SYSTEM_INSTRUCTION = `# IDENTITY & PERSONA
+You are Victor, a personal AI companion, technical ally, and conversational partner.
+- Tone: Natural, friendly, casual, and sharp. Speak like an exceptionally smart friend, coding partner, or trusted advisor.
+- Avoid robotic or mechanical clichés: Never say things like "Affirmative", "Autonomous protocol activated", "Action executed", "System operational", or "That is working".
+- Be genuine, encouraging, and clear. Speak in normal, casual conversational language while giving top-tier guidance.
 
-Your core capabilities and guidelines:
-1. Conversational & Approachable:
-   - Speak naturally, warmly, directly, and engagingly.
-   - Avoid stiff, bureaucratic, or robotic boilerplate. Adapt flexibly to the user's topic and tone.
-   - Excel at thoughtful discussions, storytelling, creative brainstorming, philosophical reflections, advice, and casual talk.
+# DYNAMIC CONVERSATION-FIRST ADAPTABILITY
+- ADAPT FLUIDLY to whatever topic the user brings to the conversation.
+- If the user is discussing coding, algorithms, or Python, meet them with deep software engineering clarity, edge-case analysis, and clean formatting.
+- If the user is discussing cooking, recipes, ingredients, or nutrition, dive in with culinary precision, flavor pairings, and enthusiasm.
+- If the user is discussing math, science, philosophy, literature, or daily productivity, match their exact domain and wavelength.
+- If the user explicitly asks about scholarships, universities, or academic applications, provide high-caliber admissions and essay guidance.
+- CRITICAL DIRECTIVE: NEVER inject unrequested topics or assume the user is applying for scholarships or universities unless they explicitly ask or their saved memories mention it. Your responses must strictly center on the conversation at hand.
 
-2. Document, Essay, & Report Writing:
-   - When requested to write essays, reports, research summaries, articles, proposals, or formal documents, produce thorough, beautifully structured, and compelling pieces.
-   - Utilize clear markdown formatting: title, executive summary / introduction, clear topical subheadings (##, ###), evidence-backed body arguments, and a thoughtful conclusion.
-   - Adapt voice seamlessly to the desired format (academic, professional business report, analytical review, creative essay, or comprehensive guide).
+# CORE TECHNICAL & CONVERSATIONAL DIRECTIVES
+- Keep full context continuity across queries. Do not treat prompts as isolated inputs.
+- Explain things clearly and conversationally. Trace operational flow and logic without unnecessary jargon.
+- When generating code, prioritize performance, edge-case safety, and clean formatting.
+- If the built-in Code Execution feature is triggered, explain the outcome cleanly.
 
-3. Mathematical & STEM Problem-Solving:
-   - When presented with mathematical problems (arithmetic, algebra, geometry, trigonometry, calculus, linear algebra, statistics, or word problems), automatically provide clear, step-by-step reasoning.
-   - Render mathematical formulas, expressions, and equations using standard LaTeX notation ($...$ for inline equations, like $f'(x) = 2x$, and $$...$$ on its own line for display equations, like $$\\int x \\, dx = \\frac{x^2}{2} + C$$).
-   - Clearly state the problem setup, show the logical steps, and highlight the final conclusion (e.g., **Final Answer:** $x = 5$).
+# IN-APP ACTIONS & AUTONOMOUS ENGINE
+You can directly manage the user's missions, notes, theme, and memories.
+When the user asks you to take an in-app action (like adding a task, completing a task, deleting a task, switching theme, saving a note, or remembering a fact), speak casually and naturally, and append an action directive block at the very end of your response formatted like this:
 
-4. Coding, Technical, & Deep Analysis:
-   - Write clean, modern, well-commented code blocks with syntax highlighting.
-   - Provide comprehensive, well-structured summaries, study notes, guides, and analyses with clear markdown headings and bullet points.`;
+\`\`\`action
+{"type": "add_task", "title": "Buy fresh basil and garlic", "category": "general", "priority": "medium"}
+\`\`\`
+
+Supported Action Types:
+- Add a task: \`{"type": "add_task", "title": "...", "category": "code" | "general" | "college" | "application", "priority": "high" | "medium" | "low", "dueDate": "optional date"}\`
+- Complete a task: \`{"type": "complete_task", "title": "..."}\`
+- Delete a task: \`{"type": "delete_task", "title": "..."}\`
+- Change theme: \`{"type": "set_theme", "theme": "dark" | "light"}\`
+- Save a note: \`{"type": "save_note", "title": "...", "content": "..."}\`
+- Remember a fact / preference: \`{"type": "save_memory", "fact": "..."}\`
+
+Important: Keep your confirmation completely natural! For example, say "Got it, I added that to your tasks!" or "Done, marked that complete!" or "I'll keep that in mind for our future chats!" Never sound like a robot.`;
 
 // Backward-compatible instructions map
 const MODE_INSTRUCTIONS: Record<string, string> = {
@@ -267,7 +330,7 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
   general: VICTOR_SYSTEM_INSTRUCTION,
 };
 
-// Model selection helper with automated graceful fallback
+// Model selection helper with automated graceful fallback and native code execution
 async function getActiveStream(contents: any[], systemInstruction: string) {
   const modelsToTry = [PRIMARY_MODEL, ...FALLBACK_MODELS];
   const ai = getGenAI();
@@ -275,19 +338,35 @@ async function getActiveStream(contents: any[], systemInstruction: string) {
 
   for (const model of modelsToTry) {
     try {
+      // First attempt: with native Gemini code execution tool
       const responseStream = await ai.models.generateContentStream({
         model,
         contents,
         config: {
           systemInstruction,
+          tools: [{ codeExecution: {} }],
         },
       });
       return { responseStream, model };
     } catch (err: any) {
-      lastError = err;
       console.warn(
-        `[Victor Model Fallback] Model ${model} failed (${err?.status || err?.message}). Trying next available model...`
+        `[Victor Model Stream] Model ${model} with tools had notice (${err?.status || err?.message}). Retrying without tool flag...`
       );
+      try {
+        const fallbackStream = await ai.models.generateContentStream({
+          model,
+          contents,
+          config: {
+            systemInstruction,
+          },
+        });
+        return { responseStream: fallbackStream, model };
+      } catch (innerErr: any) {
+        lastError = innerErr;
+        console.warn(
+          `[Victor Model Fallback] Model ${model} failed entirely (${innerErr?.status || innerErr?.message}). Trying next available model...`
+        );
+      }
     }
   }
 
@@ -296,7 +375,7 @@ async function getActiveStream(contents: any[], systemInstruction: string) {
 
 // Streaming Chat API endpoint
 app.post("/api/chat", async (req: Request, res: Response) => {
-  const { messages, customInstruction } = req.body;
+  const { messages, customInstruction, memories } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -304,10 +383,14 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     return;
   }
 
-  const selectedInstruction =
+  let selectedInstruction =
     typeof customInstruction === "string" && customInstruction.trim()
       ? customInstruction.trim()
       : VICTOR_SYSTEM_INSTRUCTION;
+
+  if (typeof memories === "string" && memories.trim()) {
+    selectedInstruction += `\n\n${memories.trim()}`;
+  }
 
   const contents = validation.data.map((m) => ({
     role: m.role,
@@ -352,6 +435,16 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       if (chunk.text) {
         res.write(`data: ${JSON.stringify({ text: chunk.text, model })}\n\n`);
       }
+      if (chunk.candidates?.[0]?.content?.parts) {
+        for (const part of chunk.candidates[0].content.parts) {
+          if (part.executableCode) {
+            res.write(`data: ${JSON.stringify({ executableCode: part.executableCode, model })}\n\n`);
+          }
+          if (part.codeExecutionResult) {
+            res.write(`data: ${JSON.stringify({ codeExecutionResult: part.codeExecutionResult, model })}\n\n`);
+          }
+        }
+      }
     }
 
     clearTimeout(timeoutId);
@@ -373,7 +466,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
 // Fallback non-streaming endpoint
 app.post("/api/chat/sync", async (req: Request, res: Response) => {
-  const { messages, customInstruction } = req.body;
+  const { messages, customInstruction, memories } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -381,10 +474,14 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
     return;
   }
 
-  const selectedInstruction =
+  let selectedInstruction =
     typeof customInstruction === "string" && customInstruction.trim()
       ? customInstruction.trim()
       : VICTOR_SYSTEM_INSTRUCTION;
+
+  if (typeof memories === "string" && memories.trim()) {
+    selectedInstruction += `\n\n${memories.trim()}`;
+  }
 
   const contents = validation.data.map((m) => ({
     role: m.role,
@@ -418,6 +515,169 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
   res.status(500).json({ error: safeMessage });
 });
 
+// ==========================================
+// Gemini Multimodal Live API (Bidirectional Audio)
+// ==========================================
+const wss = new WebSocketServer({ noServer: true });
+
+server.on("upgrade", (request, socket, head) => {
+  try {
+    const host = request.headers.host || "localhost";
+    const parsedUrl = new URL(request.url || "", `http://${host}`);
+    if (parsedUrl.pathname === "/api/live") {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    }
+  } catch (err) {
+    console.warn("[Live WS Upgrade Error]:", err);
+    socket.destroy();
+  }
+});
+
+wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
+  const host = req.headers.host || "localhost";
+  const parsedUrl = new URL(req.url || "", `http://${host}`);
+  const requestedVoice = parsedUrl.searchParams.get("voice") || "Zephyr";
+  const requestedMemories = parsedUrl.searchParams.get("memories") || "";
+
+  const validVoices = ["Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede"];
+  const voiceName = validVoices.includes(requestedVoice) ? requestedVoice : "Zephyr";
+
+  let liveSession: any = null;
+  let isAlive = true;
+
+  try {
+    const ai = getGenAI();
+    console.log(`[Gemini Live] Initializing bidirectional session (Voice: ${voiceName})...`);
+
+    let liveInstruction = VICTOR_SYSTEM_INSTRUCTION;
+    if (requestedMemories.trim()) {
+      liveInstruction += `\n\n${requestedMemories.trim()}`;
+    }
+
+    liveSession = await ai.live.connect({
+      model: "gemini-3.8-live",
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName,
+            },
+          },
+        },
+        systemInstruction: liveInstruction,
+      },
+      callbacks: {
+        onopen: () => {
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: "ready",
+              model: "gemini-3.8-live",
+              voice: voiceName,
+            }));
+          }
+        },
+        onmessage: (message: LiveServerMessage) => {
+          if (!isAlive || clientWs.readyState !== WebSocket.OPEN) return;
+
+          if (message.setupComplete) {
+            clientWs.send(JSON.stringify({ type: "setup_complete" }));
+          }
+
+          if (message.serverContent) {
+            const parts = message.serverContent.modelTurn?.parts;
+            if (parts && parts.length > 0) {
+              for (const part of parts) {
+                if (part.inlineData?.data) {
+                  clientWs.send(JSON.stringify({
+                    type: "audio",
+                    audio: part.inlineData.data,
+                  }));
+                }
+                if (part.text) {
+                  clientWs.send(JSON.stringify({
+                    type: "text",
+                    text: part.text,
+                  }));
+                }
+              }
+            }
+
+            if (message.serverContent.interrupted) {
+              clientWs.send(JSON.stringify({ type: "interrupted" }));
+            }
+
+            if (message.serverContent.turnComplete) {
+              clientWs.send(JSON.stringify({ type: "turn_complete" }));
+            }
+          }
+        },
+        onerror: (err: any) => {
+          console.error("[Gemini Live Error]:", err?.message || err);
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({
+              type: "error",
+              error: sanitizeErrorMessage(err),
+            }));
+          }
+        },
+        onclose: (e: any) => {
+          console.log("[Gemini Live Closed]:", e?.code, e?.reason);
+          if (clientWs.readyState === WebSocket.OPEN) {
+            clientWs.send(JSON.stringify({ type: "closed" }));
+          }
+        },
+      },
+    });
+
+    clientWs.on("message", (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === "audio" && msg.data) {
+          liveSession?.sendRealtimeInput({
+            audio: {
+              data: msg.data,
+              mimeType: "audio/pcm;rate=16000",
+            },
+          });
+        } else if (msg.type === "text" && msg.text) {
+          liveSession?.sendRealtimeInput({
+            text: msg.text,
+          });
+        }
+      } catch (err) {
+        console.warn("[Client WS Message Parse Error]:", err);
+      }
+    });
+
+    clientWs.on("close", () => {
+      isAlive = false;
+      try {
+        liveSession?.close();
+      } catch {}
+    });
+
+    clientWs.on("error", () => {
+      isAlive = false;
+      try {
+        liveSession?.close();
+      } catch {}
+    });
+
+  } catch (err: any) {
+    console.error("[Gemini Live Connect Init Failed]:", err);
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({
+        type: "error",
+        error: sanitizeErrorMessage(err),
+      }));
+      clientWs.close();
+    }
+  }
+});
+
 async function startServer() {
   // Vite middleware in development
   if (process.env.NODE_ENV !== "production") {
@@ -434,8 +694,9 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server listening on http://0.0.0.0:${PORT} [Primary Model: ${PRIMARY_MODEL}]`);
+    console.log(`⚡ Gemini Multimodal Live WebSocket ready on ws://0.0.0.0:${PORT}/api/live`);
   });
 }
 
