@@ -6,10 +6,23 @@ export type VoicePersona = 'breeze' | 'cove' | 'ember' | 'juniper' | 'classic';
 
 export type SpeakingStyle = 'conversational' | 'full';
 
+export interface UserMemoryItem {
+  id: string;
+  text: string;
+  createdAt: number;
+  source?: 'auto' | 'manual';
+}
+
+export interface PersonalizationSettings {
+  enabled: boolean;
+  memories: UserMemoryItem[];
+  customInstructions?: string;
+}
+
 export interface UserTask {
   id: string;
   title: string;
-  category: 'college' | 'code' | 'general' | 'application';
+  category: 'projects' | 'code' | 'general' | 'personal' | 'learning' | 'college' | 'application';
   priority: 'high' | 'medium' | 'low';
   dueDate?: string;
   completed: boolean;
@@ -24,23 +37,43 @@ export interface UserNote {
   createdAt: number;
 }
 
-export interface PersonalizationMemory {
-  id: string;
-  content: string;
-  createdAt: number;
-  category?: 'preference' | 'project' | 'background' | 'goal' | 'general';
-  source?: 'manual' | 'learned';
+export interface UserProfile {
+  email: string;
+  name?: string;
+  photoURL?: string;
+  googleLinked?: boolean;
+  signedInAt: number;
 }
 
 export interface ActionExecution {
-  type: 'add_task' | 'complete_task' | 'delete_task' | 'set_theme' | 'save_note' | 'save_memory';
+  type:
+    | 'add_task'
+    | 'complete_task'
+    | 'delete_task'
+    | 'set_theme'
+    | 'save_note'
+    | 'save_memory'
+    | 'delete_memory'
+    | 'send_email'
+    | 'draft_email'
+    | 'read_emails'
+    | 'create_doc'
+    | 'create_calendar_event'
+    | 'read_calendar';
   title?: string;
-  category?: 'college' | 'code' | 'general' | 'application';
+  category?: 'projects' | 'code' | 'general' | 'personal' | 'learning' | 'college' | 'application';
   priority?: 'high' | 'medium' | 'low';
   dueDate?: string;
   theme?: 'dark' | 'light';
   content?: string;
   fact?: string;
+  to?: string;
+  subject?: string;
+  body?: string;
+  query?: string;
+  startDateTime?: string;
+  endDateTime?: string;
+  link?: string;
   raw?: string;
 }
 

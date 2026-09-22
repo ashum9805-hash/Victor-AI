@@ -1,23 +1,15 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Plus,
   MessageSquare,
   Trash2,
   X,
-  Sparkles,
-  Smartphone,
   Calculator,
-  Sun,
-  Moon,
   Search,
-  Download,
-  Upload,
-  FileText,
-  Volume2,
-  Brain,
+  User,
+  Settings,
 } from 'lucide-react';
-import { ChatSession } from '../types';
-import { getStoredVoicePersona, getStoredSpeakingStyle, VOICE_PERSONAS } from '../utils/voiceService';
+import { ChatSession, UserProfile } from '../types';
 
 interface SidebarProps {
   sessions: ChatSession[];
@@ -25,15 +17,12 @@ interface SidebarProps {
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
-  onExportAllJson: () => void;
-  onExportCurrentMarkdown: () => void;
-  onImportSessions: (imported: ChatSession[]) => void;
   isOpen: boolean;
   onClose: () => void;
-  theme: 'light' | 'dark';
-  onToggleTheme: () => void;
-  onOpenVoiceSettings?: () => void;
-  onOpenPersonalization?: () => void;
+  currentUser: UserProfile | null;
+  onOpenSignIn: () => void;
+  onOpenSettings: () => void;
+  onSignOut?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -42,18 +31,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectSession,
   onNewSession,
   onDeleteSession,
-  onExportAllJson,
-  onExportCurrentMarkdown,
-  onImportSessions,
   isOpen,
   onClose,
-  theme,
-  onToggleTheme,
-  onOpenVoiceSettings,
-  onOpenPersonalization,
+  currentUser,
+  onOpenSignIn,
+  onOpenSettings,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Filtered sessions based on search query
   const filteredSessions = useMemo(() => {
@@ -66,41 +50,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   }, [sessions, searchQuery]);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const parsed = JSON.parse(event.target?.result as string);
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id) {
-          onImportSessions(parsed);
-        } else {
-          alert('Invalid chat backup file format.');
-        }
-      } catch {
-        alert('Could not parse JSON file.');
-      }
-    };
-    reader.readAsText(file);
-    // Reset file input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  };
-
   return (
     <>
-      {/* Hidden file input for importing JSON */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,application/json"
-        className="hidden"
-        onChange={handleFileUpload}
-      />
-
       {/* Mobile backdrop */}
       {isOpen && (
         <div
@@ -232,109 +183,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* Data export/import actions */}
-        <div className="px-3 py-2 border-t border-zinc-800/80 bg-zinc-950/40 grid grid-cols-3 gap-1 text-[10px]">
-          <button
-            type="button"
-            onClick={onExportCurrentMarkdown}
-            title="Export this conversation as Markdown"
-            aria-label="Export this conversation as Markdown"
-            className="flex flex-col items-center justify-center p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors cursor-pointer border border-zinc-800/70"
-          >
-            <FileText className="w-3 h-3 mb-0.5 text-sky-400" />
-            <span>Markdown</span>
-          </button>
-          <button
-            type="button"
-            onClick={onExportAllJson}
-            title="Backup all chats as JSON"
-            aria-label="Backup all chats as JSON"
-            className="flex flex-col items-center justify-center p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors cursor-pointer border border-zinc-800/70"
-          >
-            <Download className="w-3 h-3 mb-0.5 text-emerald-400" />
-            <span>Backup</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            title="Import chats from JSON backup"
-            aria-label="Import chats from JSON backup"
-            className="flex flex-col items-center justify-center p-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors cursor-pointer border border-zinc-800/70"
-          >
-            <Upload className="w-3 h-3 mb-0.5 text-amber-400" />
-            <span>Restore</span>
-          </button>
-        </div>
-
-        {/* Mobile & Cloud information note & Theme Toggle */}
-        <div className="p-3 border-t border-zinc-800 text-xs bg-zinc-950/50 space-y-2">
-          {onOpenPersonalization && (
+        {/* Bottom Bar: User's name/sign-in on bottom left, little gear on bottom right */}
+        <div className="p-2.5 sm:p-3 border-t border-zinc-800 bg-zinc-950/80 flex items-center justify-between gap-2">
+          {currentUser ? (
             <button
               type="button"
-              id="sidebar-personalization-btn"
-              onClick={onOpenPersonalization}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs"
+              id="sidebar-user-profile-btn"
+              onClick={onOpenSignIn}
+              title={`Signed in as ${currentUser.email} · Click to manage account`}
+              className="flex items-center gap-2.5 min-w-0 flex-1 p-1.5 rounded-xl hover:bg-zinc-900 active:bg-zinc-800/80 transition-colors text-left cursor-pointer group"
             >
-              <span className="flex items-center gap-2">
-                <Brain className="w-3.5 h-3.5 text-purple-400" />
-                <span>Memory & Context</span>
-              </span>
-              <span className="text-[11px] font-medium text-purple-400 bg-purple-950/60 border border-purple-800/60 px-2 py-0.5 rounded-md">
-                Personalized
-              </span>
+              <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-semibold flex items-center justify-center text-xs shrink-0 shadow-xs">
+                {(currentUser.name || currentUser.email).charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1 truncate">
+                <div className="text-xs font-medium text-zinc-200 group-hover:text-white truncate">
+                  {currentUser.name || currentUser.email.split('@')[0]}
+                </div>
+                <div className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="truncate">Active</span>
+                </div>
+              </div>
+            </button>
+          ) : (
+            <button
+              type="button"
+              id="sidebar-signin-btn"
+              onClick={onOpenSignIn}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-xs font-medium text-white transition-all shadow-xs cursor-pointer"
+              title="Sign in with email to save tasks"
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>Sign In</span>
             </button>
           )}
 
-          {onOpenVoiceSettings && (
-            <button
-              type="button"
-              id="sidebar-voice-settings-btn"
-              onClick={onOpenVoiceSettings}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs"
-            >
-              <span className="flex items-center gap-2">
-                <Volume2 className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Voice & Speech</span>
-              </span>
-              <span className="text-[11px] font-medium text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 px-2 py-0.5 rounded-md capitalize">
-                {VOICE_PERSONAS[getStoredVoicePersona()]?.name || 'Breeze'} · {getStoredSpeakingStyle() === 'conversational' ? 'Casual' : 'Full'}
-              </span>
-            </button>
-          )}
-
+          {/* Gear icon button on the bottom right side, no name needed */}
           <button
             type="button"
-            id="sidebar-theme-toggle"
-            aria-label={`Toggle theme, current is ${theme} mode`}
-            onClick={onToggleTheme}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs"
+            id="sidebar-settings-gear-btn"
+            onClick={onOpenSettings}
+            title="Settings (Theme, Voice, Account)"
+            aria-label="Settings"
+            className="p-2 rounded-xl text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 active:scale-95 transition-all cursor-pointer border border-transparent hover:border-zinc-800/80 group shrink-0"
           >
-            <span className="flex items-center gap-2">
-              {theme === 'dark' ? (
-                <Moon className="w-3.5 h-3.5 text-indigo-400" />
-              ) : (
-                <Sun className="w-3.5 h-3.5 text-amber-400" />
-              )}
-              <span>Theme</span>
-            </span>
-            <span className="text-[11px] font-medium text-zinc-400 capitalize bg-zinc-800 px-2 py-0.5 rounded-md">
-              {theme === 'dark' ? 'Dark mode' : 'Light mode'}
-            </span>
+            <Settings className="w-4 h-4 text-zinc-400 group-hover:text-zinc-100 group-hover:rotate-45 transition-transform duration-300" />
           </button>
-
-          <div className="flex items-start gap-2 text-zinc-400 text-[11px] leading-relaxed">
-            <Sparkles className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
-            <div>
-              <span className="font-semibold text-zinc-200">Victor Intelligence:</span>{' '}
-              Fast responses, step-by-step math solver, and conversational assistance.
-            </div>
-          </div>
-          <div className="flex items-center justify-between pt-2 border-t border-zinc-800/60 text-[10px] text-zinc-500">
-            <span className="flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber-400" /> Victor · Gemini
-            </span>
-            <span className="text-emerald-400">Online</span>
-          </div>
         </div>
       </aside>
     </>

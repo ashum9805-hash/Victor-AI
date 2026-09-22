@@ -6,13 +6,16 @@ import {
   Plus,
   Trash2,
   Clock,
-  GraduationCap,
+  Briefcase,
   Code2,
   Layers,
+  BookOpen,
+  Heart,
+  GraduationCap,
   Sparkles,
   AlertTriangle,
 } from 'lucide-react';
-import { UserTask } from '../types';
+import { UserTask, UserProfile } from '../types';
 
 interface TaskDrawerProps {
   isOpen: boolean;
@@ -22,6 +25,8 @@ interface TaskDrawerProps {
   onToggleTask: (id: string) => void;
   onDeleteTask: (id: string) => void;
   onClearCompleted: () => void;
+  currentUser?: UserProfile | null;
+  onOpenSignIn?: () => void;
 }
 
 export const TaskDrawer: React.FC<TaskDrawerProps> = ({
@@ -32,11 +37,13 @@ export const TaskDrawer: React.FC<TaskDrawerProps> = ({
   onToggleTask,
   onDeleteTask,
   onClearCompleted,
+  currentUser,
+  onOpenSignIn,
 }) => {
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [newTitle, setNewTitle] = useState('');
-  const [newCategory, setNewCategory] = useState<UserTask['category']>('college');
+  const [newCategory, setNewCategory] = useState<UserTask['category']>('projects');
   const [newPriority, setNewPriority] = useState<UserTask['priority']>('high');
   const [newDueDate, setNewDueDate] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
@@ -69,10 +76,16 @@ export const TaskDrawer: React.FC<TaskDrawerProps> = ({
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
-      case 'college':
-        return <GraduationCap className="w-3.5 h-3.5 text-indigo-500" />;
       case 'code':
         return <Code2 className="w-3.5 h-3.5 text-emerald-500" />;
+      case 'projects':
+        return <Briefcase className="w-3.5 h-3.5 text-indigo-500" />;
+      case 'learning':
+        return <BookOpen className="w-3.5 h-3.5 text-sky-500" />;
+      case 'personal':
+        return <Heart className="w-3.5 h-3.5 text-rose-500" />;
+      case 'college':
+        return <GraduationCap className="w-3.5 h-3.5 text-purple-500" />;
       case 'application':
         return <Sparkles className="w-3.5 h-3.5 text-amber-500" />;
       default:
@@ -121,9 +134,22 @@ export const TaskDrawer: React.FC<TaskDrawerProps> = ({
               <h2 className="font-semibold text-zinc-900 dark:text-zinc-100 text-sm">
                 Mission Board & Tasks
               </h2>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Victor Autonomous Task Engine
-              </p>
+              <div className="flex items-center gap-1.5 text-[11px]">
+                {currentUser ? (
+                  <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="truncate max-w-[180px]">Synced to {currentUser.email}</span>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onOpenSignIn}
+                    className="text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer font-medium"
+                  >
+                    Local Only · Sign In to Sync
+                  </button>
+                )}
+              </div>
             </div>
           </div>
           <button
@@ -208,7 +234,7 @@ export const TaskDrawer: React.FC<TaskDrawerProps> = ({
           >
             <input
               type="text"
-              placeholder="e.g., Draft UChicago Why Major essay"
+              placeholder="e.g., Build new feature, test code, or draft thoughts"
               value={newTitle}
               onChange={(e) => setNewTitle(e.target.value)}
               autoFocus
@@ -220,9 +246,10 @@ export const TaskDrawer: React.FC<TaskDrawerProps> = ({
                 onChange={(e) => setNewCategory(e.target.value as any)}
                 className="px-2 py-1.5 rounded-md bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 text-zinc-800 dark:text-zinc-200"
               >
-                <option value="college">College RD</option>
-                <option value="code">Python/Code</option>
-                <option value="application">Application</option>
+                <option value="projects">Projects</option>
+                <option value="code">Code & Dev</option>
+                <option value="learning">Learning & Study</option>
+                <option value="personal">Personal</option>
                 <option value="general">General</option>
               </select>
               <select
@@ -260,7 +287,7 @@ export const TaskDrawer: React.FC<TaskDrawerProps> = ({
               <p className="text-[11px] text-zinc-500 mt-1 max-w-xs">
                 You can ask Victor in chat: <br />
                 <span className="italic font-mono text-[10px] text-zinc-600 dark:text-zinc-300">
-                  "Victor, add KAIST deadline to my mission board"
+                  "Victor, add 'Build async API' to my tasks"
                 </span>
               </p>
             </div>

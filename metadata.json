@@ -1,6 +1,6 @@
 {
   "name": "Victor",
   "description": "Victor – an intelligent personal AI assistant powered by Gemini.",
-  "requestFramePermissions": ["microphone"],
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

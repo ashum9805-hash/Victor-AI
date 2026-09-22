@@ -21,7 +21,14 @@ export function parseActionsFromContent(content: string): {
           dueDate: parsed.dueDate,
           theme: parsed.theme,
           content: parsed.content,
-          fact: parsed.fact || parsed.content || parsed.title,
+          fact: parsed.fact || parsed.memory || parsed.text,
+          to: parsed.to,
+          subject: parsed.subject,
+          body: parsed.body,
+          query: parsed.query,
+          startDateTime: parsed.startDateTime || parsed.start_time || parsed.start,
+          endDateTime: parsed.endDateTime || parsed.end_time || parsed.end,
+          link: parsed.link || parsed.url,
           raw: jsonString.trim(),
         });
       }

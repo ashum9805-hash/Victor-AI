@@ -14,7 +14,11 @@ import {
   VolumeX,
   Terminal,
   CheckSquare,
-  Brain,
+  Mail,
+  Send,
+  FileText,
+  Calendar,
+  ExternalLink,
 } from 'lucide-react';
 import { ChatMessage } from '../types';
 import { speakText, stopSpeaking, isSpeechSynthesisSupported } from '../utils/voiceService';
@@ -26,11 +30,10 @@ interface ChatMessageItemProps {
   onRegenerate?: (messageId: string) => void;
   onEditUserMessage?: (content: string) => void;
   onOpenTaskBoard?: () => void;
-  onOpenPersonalization?: () => void;
 }
 
 export const ChatMessageItem = React.memo<ChatMessageItemProps>(
-  ({ message, onRegenerate, onEditUserMessage, onOpenTaskBoard, onOpenPersonalization }) => {
+  ({ message, onRegenerate, onEditUserMessage, onOpenTaskBoard }) => {
     const [copied, setCopied] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const isAssistant = message.role === 'assistant';
@@ -198,40 +201,56 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
             {/* Action Badges */}
             {actions.length > 0 && (
               <div className="flex flex-wrap gap-2 my-1">
-                {actions.map((act, idx) => {
-                  const isMemory = act.type === 'save_memory';
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={isMemory ? onOpenPersonalization : onOpenTaskBoard}
-                      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-medium transition-colors cursor-pointer text-left shadow-2xs ${
-                        isMemory
-                          ? 'bg-purple-50 dark:bg-purple-950/50 border-purple-200 dark:border-purple-800/70 text-purple-800 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/60'
-                          : 'bg-cyan-50 dark:bg-cyan-950/50 border-cyan-200 dark:border-cyan-800/70 text-cyan-800 dark:text-cyan-300 hover:bg-cyan-100 dark:hover:bg-cyan-900/60'
-                      }`}
-                    >
-                      {isMemory ? (
-                        <Brain className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                {actions.map((act, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={onOpenTaskBoard}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-cyan-50 dark:bg-cyan-950/50 border border-cyan-200 dark:border-cyan-800/70 text-cyan-800 dark:text-cyan-300 text-xs font-medium hover:bg-cyan-100 dark:hover:bg-cyan-900/60 transition-colors cursor-pointer text-left shadow-2xs"
+                  >
+                    <span className="shrink-0">
+                      {act.type === 'create_doc' ? (
+                        <FileText className="w-3.5 h-3.5 text-blue-500" />
+                      ) : act.type === 'create_calendar_event' || act.type === 'read_calendar' ? (
+                        <Calendar className="w-3.5 h-3.5 text-emerald-500" />
+                      ) : act.type === 'send_email' || act.type === 'draft_email' || act.type === 'read_emails' ? (
+                        <Mail className="w-3.5 h-3.5 text-red-500" />
                       ) : (
-                        <CheckSquare className="w-3.5 h-3.5 text-cyan-500 shrink-0" />
+                        <CheckSquare className="w-3.5 h-3.5 text-cyan-500" />
                       )}
-                      <span>
-                        {act.type === 'add_task' && `Added to missions: "${act.title}"`}
-                        {act.type === 'complete_task' && `Completed: "${act.title}"`}
-                        {act.type === 'delete_task' && `Removed: "${act.title}"`}
-                        {act.type === 'set_theme' && `Switched to ${act.theme} mode`}
-                        {act.type === 'save_note' && `Saved note: "${act.title}"`}
-                        {act.type === 'save_memory' && `Remembered: "${act.fact || act.title}"`}
+                    </span>
+                    <span>
+                      {act.type === 'add_task' && `Added to missions: "${act.title}"`}
+                      {act.type === 'complete_task' && `Completed: "${act.title}"`}
+                      {act.type === 'delete_task' && `Removed: "${act.title}"`}
+                      {act.type === 'set_theme' && `Switched to ${act.theme} mode`}
+                      {act.type === 'save_note' && `Saved note: "${act.title}"`}
+                      {act.type === 'send_email' && `Ready to send email to ${act.to || 'recipient'}`}
+                      {act.type === 'draft_email' && `Drafted email for ${act.to || 'recipient'}`}
+                      {act.type === 'read_emails' && `Checking Gmail inbox`}
+                      {act.type === 'create_doc' && `Google Doc: "${act.title || 'Untitled Document'}"`}
+                      {act.type === 'create_calendar_event' && `Scheduled: "${act.title || 'Event'}"`}
+                      {act.type === 'read_calendar' && `Checking Google Calendar`}
+                    </span>
+                    {act.link && (
+                      <a
+                        href={act.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-1 text-[11px] underline text-blue-600 dark:text-blue-400 font-semibold"
+                      >
+                        <span>Open</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                    {act.priority && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-200/70 dark:bg-cyan-900/70 uppercase font-mono font-bold">
+                        {act.priority}
                       </span>
-                      {act.priority && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-200/70 dark:bg-cyan-900/70 uppercase font-mono font-bold">
-                          {act.priority}
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
+                    )}
+                  </button>
+                ))}
               </div>
             )}
 

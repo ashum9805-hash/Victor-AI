@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calculator, Lightbulb, Compass, Code, BookOpen } from 'lucide-react';
+import { Calculator, Lightbulb, Code, Mail, FileText } from 'lucide-react';
 
 interface PromptSuggestionsProps {
   onSelectPrompt: (prompt: string) => void;
@@ -14,22 +14,22 @@ interface Suggestion {
 
 const UNIFIED_SUGGESTIONS: Suggestion[] = [
   {
+    title: 'Draft a Google Doc',
+    prompt: 'Create a Google Doc titled "Product Strategy 2026" with an executive summary, quarterly milestones, and KPIs.',
+    icon: FileText,
+    tag: 'Docs',
+  },
+  {
+    title: 'Executive email',
+    prompt: 'Draft an email to alex@example.com proposing a project update call tomorrow at 2 PM.',
+    icon: Mail,
+    tag: 'Assistant',
+  },
+  {
     title: 'Explore an idea',
     prompt: 'Explain quantum computing using an intuitive everyday analogy.',
     icon: Lightbulb,
     tag: 'Curiosity',
-  },
-  {
-    title: 'Draft & create',
-    prompt: 'Help me draft an engaging introduction for an article on sustainable cities.',
-    icon: BookOpen,
-    tag: 'Writing',
-  },
-  {
-    title: 'Work through a problem',
-    prompt: 'Solve 2x² + 5x - 3 = 0, showing each step clearly.',
-    icon: Calculator,
-    tag: 'Problem Solving',
   },
   {
     title: 'Code & logic',

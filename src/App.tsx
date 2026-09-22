@@ -13,8 +13,6 @@ import {
   Bot,
   RotateCcw,
   SlidersHorizontal,
-  Sun,
-  Moon,
   Mic,
   MicOff,
   CheckSquare,
@@ -28,6 +26,8 @@ import {
   UserTask,
   ActionExecution,
   CodeExecutionInfo,
+  UserProfile,
+  PersonalizationSettings,
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessageItem } from './components/ChatMessageItem';
@@ -35,14 +35,43 @@ import { MathToolbar } from './components/MathToolbar';
 import { PromptSuggestions } from './components/PromptSuggestions';
 import { TaskDrawer } from './components/TaskDrawer';
 import { JarvisLiveModal } from './components/JarvisLiveModal';
-import { PWAInstallBanner } from './components/PWAInstallBanner';
 import { VoiceSettingsModal } from './components/VoiceSettingsModal';
+import { SignInModal } from './components/SignInModal';
+import { SettingsModal } from './components/SettingsModal';
+import { EmailConfirmModal } from './components/EmailConfirmModal';
+import {
+  getStoredUserProfile,
+  setStoredUserProfile,
+} from './utils/authService';
+import {
+  googleSignIn,
+  initAuth,
+  logoutGoogle,
+  getCachedAccessToken,
+} from './utils/googleAuthService';
+import {
+  sendGmailMessage,
+  createGmailDraft,
+  listGmailMessages,
+  SendEmailPayload,
+} from './utils/gmailService';
+import {
+  createGoogleDoc,
+  createCalendarEvent,
+  listUpcomingEvents,
+} from './utils/workspaceService';
 import { parseActionsFromContent } from './utils/actionParser';
 import {
   startSpeechRecognition,
   stopSpeechRecognition,
   isSpeechRecognitionSupported,
 } from './utils/voiceService';
+import {
+  getPersonalizationSettings,
+  buildPersonalizationContext,
+  addMemory,
+  syncPersonalizationWithServer,
+} from './utils/personalizationService';
 
 const STORAGE_KEY_SESSIONS = 'ai_assistant_sessions_v1';
 const STORAGE_KEY_CURRENT = 'ai_assistant_current_id_v1';
@@ -52,38 +81,28 @@ const MAX_SAVED_SESSIONS = 50;
 
 const DEFAULT_TASKS: UserTask[] = [
   {
-    id: 'task_uchicago_rd',
-    title: 'UChicago RD Application (Common App & Supplements)',
-    category: 'college',
-    priority: 'high',
-    dueDate: 'Jan 2',
-    completed: false,
-    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 2,
-  },
-  {
-    id: 'task_kaist_intl',
-    title: 'KAIST International Application Profile & Document Check',
-    category: 'college',
-    priority: 'high',
-    dueDate: 'Jan 15',
+    id: 'task_explore',
+    title: 'Explore a new topic or project idea with Victor',
+    category: 'projects',
+    priority: 'medium',
     completed: false,
     createdAt: Date.now() - 1000 * 60 * 60 * 24,
   },
   {
-    id: 'task_py_fcc',
-    title: 'freeCodeCamp Python Track: Data Structures & Algorithms',
-    category: 'code',
-    priority: 'high',
+    id: 'task_personalize',
+    title: 'Customize Personalization & Memory in Settings',
+    category: 'general',
+    priority: 'low',
     completed: false,
     createdAt: Date.now() - 1000 * 60 * 60 * 12,
   },
   {
-    id: 'task_victor_pwa',
-    title: 'Victor-AI PWA & Jarvis Autonomous Engine Deployment',
-    category: 'code',
-    priority: 'high',
+    id: 'task_welcome',
+    title: 'Start a natural conversation thread',
+    category: 'personal',
+    priority: 'medium',
     completed: true,
-    createdAt: Date.now() - 1000 * 60 * 60 * 5,
+    createdAt: Date.now() - 1000 * 60 * 60 * 2,
     completedAt: Date.now(),
   },
 ];
@@ -236,6 +255,13 @@ export default function App() {
   const [isTaskDrawerOpen, setIsTaskDrawerOpen] = useState(false);
   const [isLiveModalOpen, setIsLiveModalOpen] = useState(false);
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
+  const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [pendingEmailPayload, setPendingEmailPayload] = useState<SendEmailPayload | null>(null);
+  const [isEmailConfirmOpen, setIsEmailConfirmOpen] = useState(false);
+  const [settingsModalTab, setSettingsModalTab] = useState<'appearance' | 'personalization' | 'voice' | 'account' | 'shortcuts' | undefined>(undefined);
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(() => getStoredUserProfile());
+  const [personalizationSettings, setPersonalizationSettings] = useState<PersonalizationSettings>(() => getPersonalizationSettings());
   const [isMicListening, setIsMicListening] = useState(false);
   const speechStopRef = useRef<(() => void) | null>(null);
 
@@ -273,23 +299,24 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Sync with server sessions on mount to guarantee chats persist across tab closes, new tabs, and incognito sessions
+  // Sync with server sessions on mount when user is signed in
   useEffect(() => {
     let active = true;
     const loadServerSessions = async () => {
+      if (!currentUser?.email) return;
       try {
-        const res = await fetch('/api/sessions');
+        const res = await fetch('/api/sessions', {
+          headers: { 'x-user-email': currentUser.email },
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (active && Array.isArray(data.sessions) && data.sessions.length > 0) {
           setSessions((localSessions) => {
             const hasLocalMessages = localSessions.some((s) => s.messages.length > 0);
             if (!hasLocalMessages) {
-              // Local is empty/clean, restore full history from server
               safelyPersistSessions(data.sessions);
               return data.sessions;
             }
-            // Merge server and local without duplicate IDs
             const localMap = new Map(localSessions.map((s) => [s.id, s]));
             for (const serverS of data.sessions as ChatSession[]) {
               if (!localMap.has(serverS.id)) {
@@ -310,17 +337,20 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [currentUser?.email]);
 
-  // Sync tasks with server on mount
+  // Sync tasks with server on mount when user is signed in
   useEffect(() => {
     let active = true;
     const loadTasks = async () => {
+      if (!currentUser?.email) return;
       try {
-        const res = await fetch('/api/tasks');
+        const res = await fetch('/api/tasks', {
+          headers: { 'x-user-email': currentUser.email },
+        });
         if (!res.ok) return;
         const data = await res.json();
-        if (active && Array.isArray(data.tasks) && data.tasks.length > 0) {
+        if (active && Array.isArray(data.tasks)) {
           setTasks(data.tasks);
           try {
             localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(data.tasks));
@@ -336,7 +366,19 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [currentUser?.email]);
+
+  // Sync personalization & memory with server when user signs in
+  useEffect(() => {
+    if (!currentUser?.email) return;
+    syncPersonalizationWithServer(currentUser.email)
+      .then((settings) => {
+        setPersonalizationSettings(settings);
+      })
+      .catch((err) => {
+        console.warn('Could not sync personalization from server:', err);
+      });
+  }, [currentUser?.email]);
 
   const persistTasks = (newTasks: UserTask[]) => {
     setTasks(newTasks);
@@ -345,11 +387,123 @@ export default function App() {
     } catch {
       // Ignore
     }
-    fetch('/api/tasks', {
+    if (currentUser?.email) {
+      fetch('/api/tasks', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-user-email': currentUser.email,
+        },
+        body: JSON.stringify({ tasks: newTasks }),
+      }).catch((e) => console.warn('Could not save tasks to server:', e));
+    }
+  };
+
+  const handleSignIn = async (email: string, name?: string) => {
+    const res = await fetch('/api/auth/signin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tasks: newTasks }),
-    }).catch((e) => console.warn('Could not save tasks to server:', e));
+      body: JSON.stringify({
+        email,
+        name,
+        currentTasks: tasks,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to sign in.');
+    }
+    const data = await res.json();
+    const profile: UserProfile = {
+      email: data.user.email,
+      name: data.user.name,
+      signedInAt: data.user.signedInAt || Date.now(),
+    };
+    setCurrentUser(profile);
+    setStoredUserProfile(profile);
+
+    if (Array.isArray(data.tasks)) {
+      setTasks(data.tasks);
+      try {
+        localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(data.tasks));
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (Array.isArray(data.sessions) && data.sessions.length > 0) {
+      setSessions(data.sessions);
+      safelyPersistSessions(data.sessions);
+      if (data.sessions[0]?.id) {
+        setCurrentSessionId(data.sessions[0].id);
+      }
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    const result = await googleSignIn();
+    if (!result) {
+      // User closed the popup or cancelled sign-in
+      return;
+    }
+    if (!result?.user?.email) {
+      throw new Error('Google authentication did not return a valid user profile.');
+    }
+
+    const { user } = result;
+    const email = user.email;
+    const name = user.displayName || email.split('@')[0];
+
+    // Register / sync with backend
+    const res = await fetch('/api/auth/signin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        name,
+        currentTasks: tasks,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to sync Google account.');
+    }
+
+    const data = await res.json();
+    const profile: UserProfile = {
+      email,
+      name,
+      photoURL: user.photoURL || undefined,
+      googleLinked: true,
+      signedInAt: Date.now(),
+    };
+
+    setCurrentUser(profile);
+    setStoredUserProfile(profile);
+
+    if (Array.isArray(data.tasks)) {
+      setTasks(data.tasks);
+      try {
+        localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(data.tasks));
+      } catch {
+        // Ignore
+      }
+    }
+
+    if (Array.isArray(data.sessions) && data.sessions.length > 0) {
+      setSessions(data.sessions);
+      safelyPersistSessions(data.sessions);
+      if (data.sessions[0]?.id) {
+        setCurrentSessionId(data.sessions[0].id);
+      }
+    }
+  };
+
+  const handleSignOut = () => {
+    logoutGoogle().catch(() => {});
+    setCurrentUser(null);
+    setStoredUserProfile(null);
   };
 
   const handleAddTask = (newTask: Omit<UserTask, 'id' | 'createdAt' | 'completed'>) => {
@@ -407,15 +561,67 @@ export default function App() {
           current = current.filter((t) => !t.title.toLowerCase().includes(kw));
         } else if (act.type === 'set_theme' && act.theme) {
           setTheme(act.theme);
+        } else if (act.type === 'save_memory' && act.fact) {
+          const updated = addMemory(act.fact, 'auto');
+          setPersonalizationSettings(updated);
+          if (currentUser?.email) {
+            syncPersonalizationWithServer(currentUser.email).catch(() => {});
+          }
+        } else if (act.type === 'send_email') {
+          // Prepare for explicit user confirmation per security guidelines
+          if (act.to && act.subject) {
+            setPendingEmailPayload({
+              to: act.to,
+              subject: act.subject,
+              body: act.body || '',
+            });
+            setIsEmailConfirmOpen(true);
+          }
+        } else if (act.type === 'draft_email') {
+          if (act.to && act.subject) {
+            createGmailDraft({
+              to: act.to,
+              subject: act.subject,
+              body: act.body || '',
+            }).catch((err) => {
+              console.warn('Auto draft failed:', err);
+            });
+          }
+        } else if (act.type === 'create_doc') {
+          if (act.title) {
+            createGoogleDoc(act.title, act.content).then((docResult) => {
+              act.link = docResult.webViewLink;
+            }).catch((err) => {
+              console.warn('Failed creating Google Doc:', err);
+            });
+          }
+        } else if (act.type === 'create_calendar_event') {
+          if (act.title && act.startDateTime && act.endDateTime) {
+            createCalendarEvent({
+              summary: act.title,
+              description: act.content,
+              startDateTime: act.startDateTime,
+              endDateTime: act.endDateTime,
+            }).then((eventResult) => {
+              act.link = eventResult.htmlLink;
+            }).catch((err) => {
+              console.warn('Failed creating Calendar event:', err);
+            });
+          }
         }
       }
       try {
         localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(current));
-        fetch('/api/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tasks: current }),
-        }).catch(() => {});
+        if (currentUser?.email) {
+          fetch('/api/tasks', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-user-email': currentUser.email,
+            },
+            body: JSON.stringify({ tasks: current }),
+          }).catch(() => {});
+        }
       } catch {
         // Ignore
       }
@@ -447,12 +653,15 @@ export default function App() {
       }
     }
 
-    // Debounced sync to server
+    // Debounced sync to server if signed in
     const timer = setTimeout(() => {
-      if (sessions.length > 0 && sessions.some((s) => s.messages.length > 0)) {
+      if (currentUser?.email && sessions.length > 0 && sessions.some((s) => s.messages.length > 0)) {
         fetch('/api/sessions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-email': currentUser.email,
+          },
           body: JSON.stringify({ sessions: sessions.slice(0, MAX_SAVED_SESSIONS) }),
         }).catch(() => {
           // Background sync fail silent
@@ -461,7 +670,7 @@ export default function App() {
     }, 800);
 
     return () => clearTimeout(timer);
-  }, [sessions, currentSessionId]);
+  }, [sessions, currentSessionId, currentUser?.email]);
 
   const currentSession =
     sessions.find((s) => s.id === currentSessionId) || sessions[0];
@@ -647,6 +856,7 @@ export default function App() {
             content: m.content,
           })),
           mode: currentSession.mode,
+          personalizationContext: buildPersonalizationContext(personalizationSettings),
         }),
         signal: abortController.signal,
       });
@@ -943,6 +1153,7 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: updatedMessages.map((m) => ({ role: m.role, content: m.content })),
+        personalizationContext: buildPersonalizationContext(personalizationSettings),
       }),
     });
 
@@ -1044,14 +1255,15 @@ export default function App() {
         onSelectSession={(id) => setCurrentSessionId(id)}
         onNewSession={() => handleNewSession()}
         onDeleteSession={handleDeleteSession}
-        onExportAllJson={handleExportAllJson}
-        onExportCurrentMarkdown={handleExportCurrentMarkdown}
-        onImportSessions={handleImportSessions}
         isOpen={isSidebarOpen}
         onClose={() => setIsSidebarOpen(false)}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        onOpenVoiceSettings={() => setIsVoiceSettingsOpen(true)}
+        currentUser={currentUser}
+        onOpenSignIn={() => setIsSignInModalOpen(true)}
+        onOpenSettings={() => {
+          setSettingsModalTab(undefined);
+          setIsSettingsOpen(true);
+        }}
+        onSignOut={handleSignOut}
       />
 
       {/* Main chat view */}
@@ -1117,22 +1329,6 @@ export default function App() {
                 </button>
               );
             })()}
-
-            {/* Dark / Light Theme Toggle Button */}
-            <button
-              id="header-theme-toggle"
-              type="button"
-              onClick={toggleTheme}
-              className="p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 hover:bg-zinc-200 dark:hover:bg-zinc-700/80 text-zinc-700 dark:text-zinc-300 active:scale-95 transition-all cursor-pointer"
-              title={theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode'}
-              aria-label={theme === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode'}
-            >
-              {theme === 'dark' ? (
-                <Sun className="w-4 h-4 text-amber-400" />
-              ) : (
-                <Moon className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
-              )}
-            </button>
           </div>
         </header>
 
@@ -1336,9 +1532,6 @@ export default function App() {
         </footer>
       </div>
 
-      {/* PWA Install Banner */}
-      <PWAInstallBanner />
-
       {/* Jarvis Missions & Task Drawer */}
       <TaskDrawer
         isOpen={isTaskDrawerOpen}
@@ -1348,6 +1541,8 @@ export default function App() {
         onDeleteTask={handleDeleteTask}
         onAddTask={handleAddTask}
         onClearCompleted={handleClearCompleted}
+        currentUser={currentUser}
+        onOpenSignIn={() => setIsSignInModalOpen(true)}
       />
 
       {/* Jarvis Full-Screen Live Voice HUD Modal */}
@@ -1362,6 +1557,61 @@ export default function App() {
         isOpen={isVoiceSettingsOpen}
         onClose={() => setIsVoiceSettingsOpen(false)}
       />
+
+      {/* Settings Modal (Theme, Personalization, Voice, Account Sync, Shortcuts) */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onSetTheme={(newTheme) => {
+          if (newTheme !== theme) toggleTheme();
+        }}
+        currentUser={currentUser}
+        onOpenSignIn={() => {
+          setIsSettingsOpen(false);
+          setIsSignInModalOpen(true);
+        }}
+        onGoogleSignIn={handleGoogleSignIn}
+        onSignOut={handleSignOut}
+        tasksCount={tasks.length}
+        initialTab={settingsModalTab}
+        onPersonalizationChange={(updated) => {
+          setPersonalizationSettings(updated);
+          if (currentUser?.email) {
+            syncPersonalizationWithServer(currentUser.email).catch(() => {});
+          }
+        }}
+      />
+
+      {/* Sign In & Account Management Modal */}
+      <SignInModal
+        isOpen={isSignInModalOpen}
+        onClose={() => setIsSignInModalOpen(false)}
+        currentUser={currentUser}
+        onSignIn={handleSignIn}
+        onGoogleSignIn={handleGoogleSignIn}
+        onSignOut={handleSignOut}
+        currentTaskCount={tasks.length}
+      />
+
+      {/* Gmail Executive Confirmation Modal */}
+      {pendingEmailPayload && (
+        <EmailConfirmModal
+          isOpen={isEmailConfirmOpen}
+          onClose={() => {
+            setIsEmailConfirmOpen(false);
+            setPendingEmailPayload(null);
+          }}
+          payload={pendingEmailPayload}
+          onConfirmSend={async (payloadToSend) => {
+            await sendGmailMessage(payloadToSend);
+          }}
+          onSaveDraft={async (payloadToDraft) => {
+            await createGmailDraft(payloadToDraft);
+          }}
+        />
+      )}
     </div>
   );
 }

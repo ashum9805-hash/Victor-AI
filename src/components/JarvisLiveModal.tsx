@@ -742,10 +742,10 @@ export const JarvisLiveModal: React.FC<JarvisLiveModalProps> = ({
           <div className="flex flex-wrap gap-1.5 justify-center">
             <button
               type="button"
-              onClick={() => handleSendLiveText('Victor, remember that I like concise and practical answers')}
+              onClick={() => handleSendLiveText('Victor, remember that I code mostly in Python and keep things concise')}
               className="px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-colors text-[11px] cursor-pointer"
             >
-              "Remember my preference"
+              "Remember my Python preference"
             </button>
             <button
               type="button"

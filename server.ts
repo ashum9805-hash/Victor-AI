@@ -27,10 +27,10 @@ if (!process.env.GEMINI_API_KEY) {
 // Request size limit
 app.use(express.json({ limit: "5mb" }));
 
-// Server-side session & task storage (Scoped per client device for privacy)
+// Server-side session storage for durable chat persistence
 const DATA_DIR = path.join(process.cwd(), "data");
-const SESSIONS_FILE = path.join(DATA_DIR, "user_sessions.json");
-const TASKS_FILE = path.join(DATA_DIR, "user_tasks.json");
+const SESSIONS_FILE = path.join(DATA_DIR, "sessions.json");
+const TASKS_FILE = path.join(DATA_DIR, "tasks.json");
 
 if (!fs.existsSync(DATA_DIR)) {
   try {
@@ -40,37 +40,68 @@ if (!fs.existsSync(DATA_DIR)) {
   }
 }
 
-interface ScopedStore {
-  [clientId: string]: any[];
-}
-
-let scopedSessions: ScopedStore = {};
+let cachedSessions: any[] = [];
 try {
   if (fs.existsSync(SESSIONS_FILE)) {
     const raw = fs.readFileSync(SESSIONS_FILE, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") scopedSessions = parsed;
+    cachedSessions = JSON.parse(raw);
+    if (!Array.isArray(cachedSessions)) cachedSessions = [];
   }
 } catch (e) {
-  console.warn("Could not read scoped sessions from file:", e);
+  console.warn("Could not read sessions from file:", e);
 }
 
-let scopedTasks: ScopedStore = {};
+let cachedTasks: any[] = [];
 try {
   if (fs.existsSync(TASKS_FILE)) {
     const raw = fs.readFileSync(TASKS_FILE, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") scopedTasks = parsed;
+    cachedTasks = JSON.parse(raw);
+    if (!Array.isArray(cachedTasks)) cachedTasks = [];
   }
 } catch (e) {
-  console.warn("Could not read scoped tasks from file:", e);
+  console.warn("Could not read tasks from file:", e);
 }
 
-function getSafeClientId(req: Request): string {
-  const headerId = (req.headers["x-client-id"] as string)?.trim();
-  const queryId = (req.query.clientId as string)?.trim();
-  const rawId = headerId || queryId || "default";
-  return rawId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64) || "default";
+// User-specific partitioned store for tasks, sessions, and personalization
+interface UserStoreRecord {
+  email: string;
+  name?: string;
+  tasks: any[];
+  sessions: any[];
+  memories?: any[];
+  personalizationEnabled?: boolean;
+  customInstructions?: string;
+  updatedAt: number;
+}
+
+const USERS_FILE = path.join(DATA_DIR, "users_data.json");
+let usersStore: Record<string, UserStoreRecord> = {};
+try {
+  if (fs.existsSync(USERS_FILE)) {
+    const raw = fs.readFileSync(USERS_FILE, "utf-8");
+    usersStore = JSON.parse(raw) || {};
+  }
+} catch (e) {
+  console.warn("Could not read users_data from file:", e);
+}
+
+function saveUsersStore() {
+  try {
+    fs.writeFileSync(USERS_FILE, JSON.stringify(usersStore, null, 2), "utf-8");
+  } catch (e) {
+    console.warn("Could not save usersStore to file:", e);
+  }
+}
+
+function extractUserEmail(req: Request): string | null {
+  const headerEmail = (req.headers["x-user-email"] as string)?.trim().toLowerCase();
+  const queryEmail = (req.query.email as string)?.trim().toLowerCase();
+  const bodyEmail = (req.body?.email as string)?.trim().toLowerCase();
+  const candidate = headerEmail || queryEmail || bodyEmail || "";
+  if (candidate && candidate.includes("@") && candidate.includes(".")) {
+    return candidate;
+  }
+  return null;
 }
 
 // Standard CORS configuration
@@ -79,7 +110,7 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, Accept"
+    "Content-Type, Authorization, Accept, x-user-email"
   );
   if (_req.method === "OPTIONS") {
     res.sendStatus(204);
@@ -139,44 +170,156 @@ const rateLimiter = (req: Request, res: Response, next: NextFunction) => {
 // Apply rate limiter to chat routes
 app.use("/api/chat", rateLimiter);
 
-// Sessions persistence endpoints (Scoped per client)
+// Authentication & Profile Sign-In endpoint
+app.post("/api/auth/signin", (req: Request, res: Response) => {
+  const { email, name, currentTasks } = req.body;
+  const userEmail = (email || "").trim().toLowerCase();
+  if (!userEmail || !userEmail.includes("@") || !userEmail.includes(".")) {
+    return res.status(400).json({ error: "Please provide a valid email address." });
+  }
+
+  if (!usersStore[userEmail]) {
+    usersStore[userEmail] = {
+      email: userEmail,
+      name: name ? String(name).trim() : undefined,
+      tasks: Array.isArray(currentTasks) ? currentTasks.slice(0, 200) : [],
+      sessions: [],
+      updatedAt: Date.now(),
+    };
+    saveUsersStore();
+  } else {
+    // If local tasks are supplied, merge them smoothly
+    if (Array.isArray(currentTasks) && currentTasks.length > 0) {
+      const existingIds = new Set((usersStore[userEmail].tasks || []).map((t: any) => t.id));
+      const newTasks = currentTasks.filter((t: any) => t && t.id && !existingIds.has(t.id));
+      usersStore[userEmail].tasks = [...newTasks, ...(usersStore[userEmail].tasks || [])].slice(0, 200);
+    }
+    if (name) {
+      usersStore[userEmail].name = String(name).trim();
+    }
+    usersStore[userEmail].updatedAt = Date.now();
+    saveUsersStore();
+  }
+
+  res.json({
+    ok: true,
+    user: {
+      email: userEmail,
+      name: usersStore[userEmail].name,
+      signedInAt: Date.now(),
+    },
+    tasks: usersStore[userEmail].tasks || [],
+    sessions: usersStore[userEmail].sessions || [],
+  });
+});
+
+// Sessions persistence endpoints (isolated per user)
 app.get("/api/sessions", (req: Request, res: Response) => {
-  const clientId = getSafeClientId(req);
-  res.json({ sessions: scopedSessions[clientId] || [] });
+  const userEmail = extractUserEmail(req);
+  if (!userEmail) {
+    // Guest mode: do not return shared global sessions to anonymous users
+    return res.json({ sessions: [], isGuest: true });
+  }
+  const userRecord = usersStore[userEmail];
+  res.json({ sessions: userRecord ? userRecord.sessions : [], isGuest: false, email: userEmail });
 });
 
 app.post("/api/sessions", (req: Request, res: Response) => {
-  const clientId = getSafeClientId(req);
+  const userEmail = extractUserEmail(req);
   const { sessions } = req.body;
-  if (Array.isArray(sessions)) {
-    scopedSessions[clientId] = sessions.slice(0, 100);
-    try {
-      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(scopedSessions), "utf-8");
-    } catch (e) {
-      console.warn("Could not save scoped sessions to file:", e);
-    }
+  if (!userEmail) {
+    // Guest mode: acknowledged, kept on client
+    return res.json({ ok: true, isGuest: true, count: Array.isArray(sessions) ? sessions.length : 0 });
   }
-  res.json({ ok: true, count: (scopedSessions[clientId] || []).length });
+  if (Array.isArray(sessions)) {
+    if (!usersStore[userEmail]) {
+      usersStore[userEmail] = {
+        email: userEmail,
+        tasks: [],
+        sessions: [],
+        updatedAt: Date.now(),
+      };
+    }
+    usersStore[userEmail].sessions = sessions.slice(0, 100);
+    usersStore[userEmail].updatedAt = Date.now();
+    saveUsersStore();
+  }
+  res.json({ ok: true, count: usersStore[userEmail]?.sessions?.length || 0, email: userEmail });
 });
 
-// Tasks persistence endpoints (Scoped per client)
+// Tasks persistence endpoints (isolated per user)
 app.get("/api/tasks", (req: Request, res: Response) => {
-  const clientId = getSafeClientId(req);
-  res.json({ tasks: scopedTasks[clientId] || [] });
+  const userEmail = extractUserEmail(req);
+  if (!userEmail) {
+    // Guest mode: do not expose any other user's tasks
+    return res.json({ tasks: [], isGuest: true });
+  }
+  const userRecord = usersStore[userEmail];
+  res.json({ tasks: userRecord ? userRecord.tasks : [], isGuest: false, email: userEmail });
 });
 
 app.post("/api/tasks", (req: Request, res: Response) => {
-  const clientId = getSafeClientId(req);
+  const userEmail = extractUserEmail(req);
   const { tasks } = req.body;
-  if (Array.isArray(tasks)) {
-    scopedTasks[clientId] = tasks.slice(0, 200);
-    try {
-      fs.writeFileSync(TASKS_FILE, JSON.stringify(scopedTasks, null, 2), "utf-8");
-    } catch (e) {
-      console.warn("Could not save scoped tasks to file:", e);
-    }
+  if (!userEmail) {
+    // Guest mode: acknowledge without overwriting cloud storage
+    return res.json({ ok: true, isGuest: true, count: Array.isArray(tasks) ? tasks.length : 0 });
   }
-  res.json({ ok: true, count: (scopedTasks[clientId] || []).length });
+  if (Array.isArray(tasks)) {
+    if (!usersStore[userEmail]) {
+      usersStore[userEmail] = {
+        email: userEmail,
+        tasks: [],
+        sessions: [],
+        updatedAt: Date.now(),
+      };
+    }
+    usersStore[userEmail].tasks = tasks.slice(0, 200);
+    usersStore[userEmail].updatedAt = Date.now();
+    saveUsersStore();
+  }
+  res.json({ ok: true, count: usersStore[userEmail]?.tasks?.length || 0, email: userEmail });
+});
+
+// Personalization & Long-Term Memory persistence endpoints
+app.get("/api/personalization", (req: Request, res: Response) => {
+  const userEmail = extractUserEmail(req);
+  if (!userEmail || !usersStore[userEmail]) {
+    return res.json({ enabled: true, memories: [], customInstructions: "" });
+  }
+  const rec = usersStore[userEmail];
+  res.json({
+    enabled: rec.personalizationEnabled ?? true,
+    memories: rec.memories || [],
+    customInstructions: rec.customInstructions || "",
+  });
+});
+
+app.post("/api/personalization", (req: Request, res: Response) => {
+  const userEmail = extractUserEmail(req);
+  const { enabled, memories, customInstructions } = req.body;
+  if (userEmail) {
+    if (!usersStore[userEmail]) {
+      usersStore[userEmail] = {
+        email: userEmail,
+        tasks: [],
+        sessions: [],
+        updatedAt: Date.now(),
+      };
+    }
+    if (typeof enabled === "boolean") {
+      usersStore[userEmail].personalizationEnabled = enabled;
+    }
+    if (Array.isArray(memories)) {
+      usersStore[userEmail].memories = memories.slice(0, 100);
+    }
+    if (typeof customInstructions === "string") {
+      usersStore[userEmail].customInstructions = customInstructions.slice(0, 1000);
+    }
+    usersStore[userEmail].updatedAt = Date.now();
+    saveUsersStore();
+  }
+  res.json({ ok: true });
 });
 
 // Initialize Google GenAI client lazily
@@ -286,42 +429,49 @@ app.get("/api/health", (_req: Request, res: Response) => {
 
 // Unified Victor Intelligence System Instruction
 const VICTOR_SYSTEM_INSTRUCTION = `# IDENTITY & PERSONA
-You are Victor, a personal AI companion, technical ally, and conversational partner.
-- Tone: Natural, friendly, casual, and sharp. Speak like an exceptionally smart friend, coding partner, or trusted advisor.
+You are Victor, an intelligent, personal AI companion, technical ally, and conversational collaborator.
+- Tone: Natural, friendly, casual, perceptive, and sharp. Speak like an exceptionally smart friend.
 - Avoid robotic or mechanical clichés: Never say things like "Affirmative", "Autonomous protocol activated", "Action executed", "System operational", or "That is working".
-- Be genuine, encouraging, and clear. Speak in normal, casual conversational language while giving top-tier guidance.
+- Be genuine, encouraging, and clear. Speak in normal, casual conversational language.
 
-# DYNAMIC CONVERSATION-FIRST ADAPTABILITY
-- ADAPT FLUIDLY to whatever topic the user brings to the conversation.
-- If the user is discussing coding, algorithms, or Python, meet them with deep software engineering clarity, edge-case analysis, and clean formatting.
-- If the user is discussing cooking, recipes, ingredients, or nutrition, dive in with culinary precision, flavor pairings, and enthusiasm.
-- If the user is discussing math, science, philosophy, literature, or daily productivity, match their exact domain and wavelength.
-- If the user explicitly asks about scholarships, universities, or academic applications, provide high-caliber admissions and essay guidance.
-- CRITICAL DIRECTIVE: NEVER inject unrequested topics or assume the user is applying for scholarships or universities unless they explicitly ask or their saved memories mention it. Your responses must strictly center on the conversation at hand.
+# ADAPTIVE CONVERSATIONAL INTELLIGENCE
+- Meet the user where they are: Base your responses and conversation strictly on what the user is actively talking about.
+- If the user discusses coding, technology, Python, or engineering: Provide clear code, sound principles, clean formatting, and step-by-step logic.
+- If the user discusses cooking, food, writing, creative ideas, science, philosophy, or day-to-day life: Fully immerse into that topic with curiosity, helpfulness, and conversational depth.
+- Do NOT make unprompted assumptions about the user's personal milestones, and do NOT inject unrelated topics (such as college applications or scholarships) unless the user explicitly introduces them.
+- Maintain smooth context continuity across the conversation.
 
-# CORE TECHNICAL & CONVERSATIONAL DIRECTIVES
-- Keep full context continuity across queries. Do not treat prompts as isolated inputs.
-- Explain things clearly and conversationally. Trace operational flow and logic without unnecessary jargon.
-- When generating code, prioritize performance, edge-case safety, and clean formatting.
-- If the built-in Code Execution feature is triggered, explain the outcome cleanly.
-
-# IN-APP ACTIONS & AUTONOMOUS ENGINE
-You can directly manage the user's missions, notes, theme, and memories.
-When the user asks you to take an in-app action (like adding a task, completing a task, deleting a task, switching theme, saving a note, or remembering a fact), speak casually and naturally, and append an action directive block at the very end of your response formatted like this:
+# IN-APP ACTIONS, TASKS & LONG-TERM MEMORY
+You can directly manage the user's dashboard, missions, and memory.
+When the user asks you to take an in-app action (adding a task, completing a task, switching theme, saving a note, or remembering a fact/preference about them across chats), speak casually and naturally, and append an action directive block at the very end of your response formatted like this:
 
 \`\`\`action
-{"type": "add_task", "title": "Buy fresh basil and garlic", "category": "general", "priority": "medium"}
+{"type": "add_task", "title": "Build Python CLI parser", "category": "code", "priority": "high"}
 \`\`\`
 
 Supported Action Types:
-- Add a task: \`{"type": "add_task", "title": "...", "category": "code" | "general" | "college" | "application", "priority": "high" | "medium" | "low", "dueDate": "optional date"}\`
+- Add a task: \`{"type": "add_task", "title": "...", "category": "projects" | "code" | "general" | "personal" | "learning", "priority": "high" | "medium" | "low", "dueDate": "optional date"}\`
 - Complete a task: \`{"type": "complete_task", "title": "..."}\`
 - Delete a task: \`{"type": "delete_task", "title": "..."}\`
 - Change theme: \`{"type": "set_theme", "theme": "dark" | "light"}\`
 - Save a note: \`{"type": "save_note", "title": "...", "content": "..."}\`
-- Remember a fact / preference: \`{"type": "save_memory", "fact": "..."}\`
+- Save long-term memory: \`{"type": "save_memory", "fact": "The specific preference, interest, or background detail to remember"}\`
+- Send an email: \`{"type": "send_email", "to": "email@domain.com", "subject": "Subject text", "body": "Body text"}\`
+- Draft an email: \`{"type": "draft_email", "to": "email@domain.com", "subject": "Subject text", "body": "Body text"}\`
+- Read or search emails: \`{"type": "read_emails", "query": "search query"}\`
+- Create a Google Doc: \`{"type": "create_doc", "title": "Doc Title", "content": "Full draft content for the document"}\`
+- Schedule a Calendar Event: \`{"type": "create_calendar_event", "title": "Meeting / Event Title", "startDateTime": "2026-09-22T14:00:00Z", "endDateTime": "2026-09-22T15:00:00Z", "content": "Agenda"}\`
+- Check Upcoming Calendar: \`{"type": "read_calendar"}\`
 
-Important: Keep your confirmation completely natural! For example, say "Got it, I added that to your tasks!" or "Done, marked that complete!" or "I'll keep that in mind for our future chats!" Never sound like a robot.`;
+# EXECUTIVE ASSISTANT & WORKSPACE CAPABILITIES
+When the user asks you to email someone, draft an email, draft a Google Doc, create notes in Docs, or schedule an event on Google Calendar:
+1. Speak in a helpful, conversational tone and describe what you've prepared or created.
+2. Include the corresponding action directive block (\`send_email\`, \`draft_email\`, \`read_emails\`, \`create_doc\`, \`create_calendar_event\`, or \`read_calendar\`).
+3. For sending emails: Summarize the recipient and subject clearly so the user can review before it's sent.
+4. For Google Docs: Generate well-structured, thorough content in the \`content\` field so the document is immediately usable.
+5. For Calendar: Always use standard ISO 8601 timestamps for \`startDateTime\` and \`endDateTime\`. The current year is 2026.
+
+Important: Keep your confirmation completely natural! For example, say "I've drafted that Google Doc for you!" or "I scheduled that meeting on your calendar!" or "Done, marked that complete!" Never sound like a robot.`;
 
 // Backward-compatible instructions map
 const MODE_INSTRUCTIONS: Record<string, string> = {
@@ -375,7 +525,7 @@ async function getActiveStream(contents: any[], systemInstruction: string) {
 
 // Streaming Chat API endpoint
 app.post("/api/chat", async (req: Request, res: Response) => {
-  const { messages, customInstruction, memories } = req.body;
+  const { messages, customInstruction, personalizationContext } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -383,14 +533,16 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     return;
   }
 
-  let selectedInstruction =
+  let baseInstruction =
     typeof customInstruction === "string" && customInstruction.trim()
       ? customInstruction.trim()
       : VICTOR_SYSTEM_INSTRUCTION;
 
-  if (typeof memories === "string" && memories.trim()) {
-    selectedInstruction += `\n\n${memories.trim()}`;
+  if (typeof personalizationContext === "string" && personalizationContext.trim()) {
+    baseInstruction += "\n\n" + personalizationContext.trim();
   }
+
+  const selectedInstruction = baseInstruction;
 
   const contents = validation.data.map((m) => ({
     role: m.role,
@@ -466,7 +618,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
 // Fallback non-streaming endpoint
 app.post("/api/chat/sync", async (req: Request, res: Response) => {
-  const { messages, customInstruction, memories } = req.body;
+  const { messages, customInstruction, personalizationContext } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -474,14 +626,16 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
     return;
   }
 
-  let selectedInstruction =
+  let baseInstruction =
     typeof customInstruction === "string" && customInstruction.trim()
       ? customInstruction.trim()
       : VICTOR_SYSTEM_INSTRUCTION;
 
-  if (typeof memories === "string" && memories.trim()) {
-    selectedInstruction += `\n\n${memories.trim()}`;
+  if (typeof personalizationContext === "string" && personalizationContext.trim()) {
+    baseInstruction += "\n\n" + personalizationContext.trim();
   }
+
+  const selectedInstruction = baseInstruction;
 
   const contents = validation.data.map((m) => ({
     role: m.role,
@@ -539,7 +693,6 @@ wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
   const host = req.headers.host || "localhost";
   const parsedUrl = new URL(req.url || "", `http://${host}`);
   const requestedVoice = parsedUrl.searchParams.get("voice") || "Zephyr";
-  const requestedMemories = parsedUrl.searchParams.get("memories") || "";
 
   const validVoices = ["Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede"];
   const voiceName = validVoices.includes(requestedVoice) ? requestedVoice : "Zephyr";
@@ -550,11 +703,6 @@ wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
   try {
     const ai = getGenAI();
     console.log(`[Gemini Live] Initializing bidirectional session (Voice: ${voiceName})...`);
-
-    let liveInstruction = VICTOR_SYSTEM_INSTRUCTION;
-    if (requestedMemories.trim()) {
-      liveInstruction += `\n\n${requestedMemories.trim()}`;
-    }
 
     liveSession = await ai.live.connect({
       model: "gemini-3.8-live",
@@ -567,7 +715,7 @@ wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
             },
           },
         },
-        systemInstruction: liveInstruction,
+        systemInstruction: VICTOR_SYSTEM_INSTRUCTION,
       },
       callbacks: {
         onopen: () => {
