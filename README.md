@@ -1,87 +1,113 @@
 # Victor-AI
 
-Victor-AI is a personal AI assistant demo built with React and a Node/Express backend. It pairs a conversational chat interface with task tracking, memory, workspace/project notes, Google-integrated actions, and optional live voice interaction powered by Gemini.
+Victor-AI is a personal AI assistant built as a demo application. It combines a polished React chat interface with a Node/Express backend that integrates with Google Gemini for streaming conversations, optional web-grounded search, task tracking, personalization, project notes, and live voice interaction.
 
-## Overview
+## What this project does
 
-This project is designed as a polished AI companion experience rather than a generic chat demo. The app includes:
+This repo is not just a simple chatbot. It is designed as a personal productivity and assistant experience with a UI that supports:
 
-- streaming chat responses from Google Gemini
-- optional web-search grounding for up-to-date answers
+- conversational chat with Gemini
+- web-search grounding for fresh answers
+- math-mode interactions
 - task and mission tracking
-- personalization and long-term memory
-- project/workspace notes in an "Atelier" flow
-- email/doc/calendar action support patterns
-- live voice conversation over WebSockets
-- PWA-friendly frontend assets
-
-## Features
-
-### Conversational AI
-- Chat with Gemini through a streaming SSE endpoint
-- supports `casual`, `math`, and `general` modes
-- includes search grounding when enabled
-- supports code execution output when available
-
-### Personal assistant workflows
-- persistent sessions and tasks per user
-- user memory / personalization settings
-- task actions like add, complete, delete, and theme changes
-- quick note and project-note actions
-
-### Workspace and productivity features
-- atelier/project management
-- project notes for contextual workspaces
-- Google Docs / Gmail / Calendar integration patterns and action prompts
-
-### Voice and live interaction
-- WebSocket live API for bidirectional voice conversation
-- multiple voice presets in the live audio flow
-- speech-to-text input support in the frontend
+- memory and personalization settings
+- project/workspace notes in an Atelier-style workflow
+- Google Docs / Gmail / Calendar action patterns
+- voice input and live voice conversation
+- local persistence for sessions, tasks, and user state
 
 ## Tech stack
 
 - Frontend: React 19 + Vite + TypeScript
 - Backend: Express + Node.js
-- AI: Google GenAI SDK (`@google/genai`)
+- AI layer: Google GenAI SDK (`@google/genai`)
 - Styling: Tailwind CSS
-- Media/UX: lucide-react, react-markdown, remark-math, rehype-katex
-- Real-time: WebSockets (`ws`)
+- Markdown / math rendering: `react-markdown`, `remark-math`, `rehype-katex`
+- Realtime: WebSockets (`ws`)
 - PWA support: `vite-plugin-pwa`
+- Auth / cloud patterns: Firebase integration is present in the project and used for app-level identity workflows
 
-## Project structure
+## Repository structure
 
 ```text
 .
-├── data/                        # persisted session/task/memory data
-├── public/                      # static assets, icons, PWA files
+├── data/                       # persisted session/task/memory/project data
+├── public/                     # static assets, icons, manifest, PWA graphics
 ├── src/
-│   ├── App.tsx                  # main app shell and all core app logic
-│   ├── main.tsx                 # app bootstrap
-│   ├── types.ts                 # shared TypeScript interfaces
-│   ├── index.css                # app styles
-│   └── components/              # UI components (sidebar, drawers, modals, etc.)
-├── .env.example                 # environment variable template
-├── index.html                   # Vite HTML entry
-├── metadata.json                # project metadata
-├── package.json                 # scripts and dependencies
-├── server.ts                    # Express server and Gemini API integration
-├── tsconfig.json                # TypeScript config
-├── vite.config.ts               # Vite config
-├── bun.lock                     # Bun lockfile
-├── firebase-applet-config.json  # Firebase config artifact
+│   ├── App.tsx                 # main application logic and chat UI
+│   ├── main.tsx                # React entry point
+│   ├── types.ts                # chat/task/note/project models
+│   ├── index.css               # application styling
+│   ├── components/             # sidebar, drawers, modal, chat item, etc.
+│   └── utils/                  # auth, Gmail, workspace, personalization, voice helpers
+├── .env.example                # environment template
 ├── .gitignore
-└── README.md
+├── bun.lock                    # Bun lockfile
+├── firebase-applet-config.json # Firebase applet config
+├── index.html                  # Vite HTML entry
+├── metadata.json               # project metadata
+├── package.json                # app scripts and dependencies
+├── server.ts                   # Express server and Gemini API integration
+├── tsconfig.json               # TypeScript config
+├── vite.config.ts              # Vite config
+├── README.md                   # project documentation
+└── LICENSE                     # optional — currently not present in repo
 ```
+
+## How it works
+
+The app has two main layers:
+
+1. Frontend: a React application that renders the chat UI, task board, settings, voice controls, and workspace drawers.
+2. Backend: an Express server that exposes endpoints for chat, task/session persistence, personalization, and live voice.
+
+The main flow is:
+
+- User enters a prompt in the React UI
+- The frontend sends the conversation to `/api/chat`
+- The backend validates the payload and calls Google Gemini
+- Responses stream back using Server-Sent Events (SSE)
+- The frontend updates the chat feed live and parses any executable actions contained in the response
+- Actions can update tasks, save notes, switch theme, save memory, or prepare email/calendar/doc actions
+
+This is the core logic behind the app’s “assistant” experience.
+
+## Features
+
+### AI chat experience
+- streaming chat responses from Gemini
+- optional web-search grounding
+- fallback model logic
+- support for casual, general, and math conversation modes
+
+### Personal assistant features
+- user sessions saved per user
+- task/missions dashboard
+- memory and personalization settings
+- long-term user preferences
+- note-taking and project workspace context
+
+### Workspace and productivity tools
+- Atelier-style project management
+- project notes and notes saved into project context
+- action parsing for productivity tasks
+- Gmail, Google Docs, and calendar-related action patterns
+
+### Voice and live interaction
+- speech-to-text input support in the UI
+- live voice conversation via WebSocket
+- selectable voice configs for the live assistant
+
+## Prerequisites
+
+Before running the app, make sure you have:
+
+- Node.js 18+ or Bun installed
+- a Google Gemini API key
 
 ## Getting started
 
-### Prerequisites
-
-- Node.js 18+ or Bun
-- a Google Gemini API key
-
-### Install dependencies
+### 1. Install dependencies
 
 ```bash
 npm install
@@ -89,21 +115,21 @@ npm install
 bun install
 ```
 
-### Environment setup
+### 2. Configure your environment
 
-Copy the example environment file and add your Gemini API key:
+Copy the example env file:
 
 ```bash
 cp .env.example .env
 ```
 
-Then add the required value:
+Then add your Gemini API key:
 
 ```env
 GEMINI_API_KEY=your_api_key_here
 ```
 
-If you are using a different model or want to override the default, you can also set:
+Optional override:
 
 ```env
 GEMINI_MODEL=gemini-3.5-flash-lite
@@ -111,7 +137,7 @@ GEMINI_MODEL=gemini-3.5-flash-lite
 
 ## Running the app
 
-### Development
+### Development mode
 
 ```bash
 npm run dev
@@ -119,7 +145,13 @@ npm run dev
 bun run dev
 ```
 
-This starts the Express server and the Vite frontend in development mode.
+This starts the Express backend and Vite frontend in development mode.
+
+The app listens on:
+
+```text
+http://localhost:3000
+```
 
 ### Production build
 
@@ -128,47 +160,64 @@ npm run build
 npm run start
 ```
 
-### Preview production bundle
+### Preview production build
 
 ```bash
 npm run preview
 ```
 
-## Runtime behavior
+## Important runtime notes
 
-The app starts an Express server on port 3000. The frontend communicates with:
+- The backend explicitly warns if `GEMINI_API_KEY` is missing.
+- Chat functionality will fail until that env var is configured.
+- Search-grounded responses depend on model availability and tool support.
+- The app stores user-specific data under `data/` and persists sessions/tasks/client state in JSON files.
+- The live voice endpoint is served over WebSocket at `/api/live`.
 
-- `/api/chat` for streaming chat responses
-- `/api/chat/sync` for synchronous fallback requests
-- `/api/sessions` for session persistence
-- `/api/tasks` for mission/task persistence
-- `/api/personalization` for memory customization
-- `/api/atelier` for project/workspace data
-- `/api/live` for live voice WebSocket sessions
+## Main API endpoints
 
-The backend validates incoming payloads, applies a lightweight rate limiter, and tries a primary Gemini model with graceful fallbacks.
+The backend exposes several routes used by the app:
 
-## Notes
+- `POST /api/chat` — streaming chat response
+- `POST /api/chat/sync` — fallback non-streaming chat call
+- `GET /api/sessions` / `POST /api/sessions` — session persistence
+- `GET /api/tasks` / `POST /api/tasks` — task persistence
+- `GET /api/personalization` / `POST /api/personalization` — memory settings
+- `GET /api/atelier` / `POST /api/atelier` — project/workspace data
+- `GET /api/health` — health check endpoint
+- `WS /api/live` — live voice websocket connection
 
-- The app is intentionally designed as a demo/personal assistant rather than a general-purpose product template.
-- Search grounding and live voice features depend on available model capabilities and environment configuration.
-- Responses should still be checked for correctness and accuracy before being relied on for critical work.
+## Troubleshooting
+
+### Missing Gemini API key
+If you start the server without `GEMINI_API_KEY`, the app will still boot, but chat requests will fail until the key is added.
+
+### No responses from the model
+Check the server logs for Gemini-side errors such as:
+
+- invalid or expired API key
+- quota exhaustion
+- model/tool unavailability
+
+### Local persistence issues
+The app keeps state in `data/` and uses browser local storage for some UI state. If you are testing a fresh clone, clearing local storage or resetting `data/` may help.
 
 ## License
 
-No explicit license file is present in the repo at the moment, so licensing status should be confirmed before redistribution or commercial use.
+There is no license file in the repository at the moment. Before publishing, redistributing, or using this project beyond personal/demo purposes, you should add an appropriate open-source license.
 
-## Contributing
+## Future opportunities
 
-This repo appears to be a personal project/demo. If you want to extend it, the most natural areas are:
+This repo is a strong base for continued work in any of these directions:
 
-- improving the chat system prompts
-- expanding workspace/project data models
-- adding stronger auth and persistence layers
-- integrating more external service actions
-- refining the frontend UX and mobile behavior
+- deeper user auth and account management
+- stronger persistence and cloud sync
+- expanded productivity integrations
+- better test coverage
+- UI refinement and mobile polish
+- production hardening for deployment
 
 ## Acknowledgements
 
-- Google Gemini / Google GenAI
-- React, Vite, Express, and the rest of the TypeScript ecosystem used in this project
+This project uses the Google Gemini API, React, Vite, Express, and the wider TypeScript ecosystem.
+
