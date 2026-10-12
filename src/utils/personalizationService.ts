@@ -159,6 +159,25 @@ Instruction: Use these facts naturally to tailor your tone, examples, and recomm
 }
 
 /**
+ * Formats memories and personalization instructions for system instruction injection.
+ * Accepts optional settings or memory array, defaulting to current persisted settings.
+ */
+export function formatMemoriesForSystemInstruction(
+  input?: PersonalizationSettings | UserMemoryItem[]
+): string {
+  if (!input) {
+    return buildPersonalizationContext(getPersonalizationSettings());
+  }
+  if (Array.isArray(input)) {
+    return buildPersonalizationContext({
+      enabled: true,
+      memories: input,
+    });
+  }
+  return buildPersonalizationContext(input);
+}
+
+/**
  * Sync personalization data with server if email is provided
  */
 export async function syncPersonalizationWithServer(

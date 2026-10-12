@@ -94,8 +94,16 @@ export class GeminiLiveSession {
     this.voiceName = voiceName;
     this.setStatus('connecting', 'Establishing secure link to Gemini Live...');
 
+    // 1. Check if mediaDevices is supported in this browser environment
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      const errMsg = 'Microphone audio input is not supported in this browser or context.';
+      this.setStatus('error', errMsg);
+      this.callbacks.onError?.(errMsg);
+      return;
+    }
+
+    // 2. Request microphone permission
     try {
-      // 1. Request microphone permission first
       this.micStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -105,12 +113,33 @@ export class GeminiLiveSession {
           sampleRate: 16000,
         },
       });
+    } catch (micErr: any) {
+      const isDenied =
+        micErr?.name === 'NotAllowedError' ||
+        micErr?.name === 'PermissionDeniedError' ||
+        micErr?.name === 'SecurityError' ||
+        String(micErr?.message || '').toLowerCase().includes('permission') ||
+        String(micErr?.message || '').toLowerCase().includes('not allowed');
 
-      // 2. Initialize Audio Contexts
-      // Input Audio Context at 16,000Hz (Native Gemini PCM Input rate)
+      const errMsg = isDenied
+        ? 'Microphone permission was not granted. Please allow microphone access in your browser or switch to standard voice.'
+        : `Microphone unavailable: ${micErr?.message || micErr}`;
+
+      console.warn('[Live Mic Permission]:', errMsg);
+      this.setStatus('error', errMsg);
+      this.callbacks.onError?.(errMsg);
+      this.disconnect();
+      return;
+    }
+
+    // 3. Initialize Audio Contexts and WebSocket pipeline
+    try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) {
+        throw new Error('Web Audio API is not supported in this browser.');
+      }
+
       this.inputAudioCtx = new AudioCtx({ sampleRate: 16000 });
-      // Output Audio Context at 24,000Hz (Native Gemini Live output rate)
       this.outputAudioCtx = new AudioCtx({ sampleRate: 24000 });
 
       // Resume if suspended by browser policy
@@ -123,7 +152,7 @@ export class GeminiLiveSession {
 
       this.nextPlayTime = this.outputAudioCtx.currentTime;
 
-      // 3. Connect to server WebSocket bridge
+      // Connect to server WebSocket bridge
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const memoriesParam = encodeURIComponent(formatMemoriesForSystemInstruction());
       const wsUrl = `${protocol}//${window.location.host}/api/live?voice=${encodeURIComponent(voiceName)}&memories=${memoriesParam}`;
@@ -144,7 +173,7 @@ export class GeminiLiveSession {
       };
 
       this.ws.onerror = (err) => {
-        console.error('[Live WS Error]:', err);
+        console.warn('[Live WS Error]:', err);
         this.setStatus('error', 'Connection error occurred with Live service');
         if (this.callbacks.onError) {
           this.callbacks.onError('Connection error with the Gemini Live service.');
@@ -162,16 +191,13 @@ export class GeminiLiveSession {
       this.setupMicrophonePipeline();
 
     } catch (err: any) {
-      console.error('[Live Connect Failed]:', err);
-      const errMsg = err?.name === 'NotAllowedError'
-        ? 'Microphone permission denied. Please allow microphone access to talk live with Victor.'
-        : `Could not start live session: ${err?.message || err}`;
+      console.warn('[Live Audio Setup Error]:', err?.message || err);
+      const errMsg = `Could not start live session: ${err?.message || err}`;
       this.setStatus('error', errMsg);
       if (this.callbacks.onError) {
         this.callbacks.onError(errMsg);
       }
       this.disconnect();
-      throw err;
     }
   }
 

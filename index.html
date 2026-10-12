@@ -3,6 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      // Suppress Vite HMR WebSocket connection errors in AI Studio where HMR is disabled
+      window.addEventListener('error', function(e) {
+        var msg = e && (e.message || (e.error && e.error.message) || '');
+        var file = (e && e.filename) || '';
+        if (
+          (msg && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) ||
+          (file && file.indexOf('@vite/client') !== -1)
+        ) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      }, true);
+      window.addEventListener('unhandledrejection', function(e) {
+        var reason = e.reason ? (e.reason.message || String(e.reason)) : '';
+        if (reason && (reason.indexOf('WebSocket') !== -1 || reason.indexOf('closed without opened') !== -1)) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      });
+    </script>
     <title>Victor</title>
     <meta name="description" content="Victor – an intelligent personal AI assistant powered by Gemini." />
     <meta property="og:title" content="Victor" />

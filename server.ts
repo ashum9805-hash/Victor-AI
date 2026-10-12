@@ -9,6 +9,9 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+// Ensure HMR is disabled in AI Studio dev server per environment constraints
+process.env.DISABLE_HMR = "true";
+
 const app = express();
 const server = http.createServer(app);
 const PORT = 3000;
@@ -69,6 +72,7 @@ interface UserStoreRecord {
   tasks: any[];
   sessions: any[];
   memories?: any[];
+  projects?: any[];
   personalizationEnabled?: boolean;
   customInstructions?: string;
   updatedAt: number;
@@ -322,6 +326,43 @@ app.post("/api/personalization", (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// Atelier Workspaces persistence endpoints (isolated per user)
+app.get("/api/atelier", (req: Request, res: Response) => {
+  const userEmail = extractUserEmail(req);
+  if (!userEmail) {
+    return res.json({ projects: [], isGuest: true });
+  }
+  const userRecord = usersStore[userEmail];
+  res.json({
+    projects: userRecord ? (userRecord.projects || []) : [],
+    isGuest: false,
+    email: userEmail,
+  });
+});
+
+app.post("/api/atelier", (req: Request, res: Response) => {
+  const userEmail = extractUserEmail(req);
+  const { projects } = req.body;
+  if (!userEmail) {
+    return res.json({ ok: true, isGuest: true, count: Array.isArray(projects) ? projects.length : 0 });
+  }
+  if (Array.isArray(projects)) {
+    if (!usersStore[userEmail]) {
+      usersStore[userEmail] = {
+        email: userEmail,
+        tasks: [],
+        sessions: [],
+        projects: [],
+        updatedAt: Date.now(),
+      };
+    }
+    usersStore[userEmail].projects = projects.slice(0, 50);
+    usersStore[userEmail].updatedAt = Date.now();
+    saveUsersStore();
+  }
+  res.json({ ok: true, count: usersStore[userEmail]?.projects?.length || 0, email: userEmail });
+});
+
 // Initialize Google GenAI client lazily
 let aiClient: GoogleGenAI | null = null;
 
@@ -454,7 +495,8 @@ Supported Action Types:
 - Complete a task: \`{"type": "complete_task", "title": "..."}\`
 - Delete a task: \`{"type": "delete_task", "title": "..."}\`
 - Change theme: \`{"type": "set_theme", "theme": "dark" | "light"}\`
-- Save a note: \`{"type": "save_note", "title": "...", "content": "..."}\`
+- Save a note or workspace reference to Atelier: \`{"type": "save_project_note", "title": "Note Title", "content": "Full markdown note content"}\`
+- Save a quick note: \`{"type": "save_note", "title": "...", "content": "..."}\`
 - Save long-term memory: \`{"type": "save_memory", "fact": "The specific preference, interest, or background detail to remember"}\`
 - Send an email: \`{"type": "send_email", "to": "email@domain.com", "subject": "Subject text", "body": "Body text"}\`
 - Draft an email: \`{"type": "draft_email", "to": "email@domain.com", "subject": "Subject text", "body": "Body text"}\`
@@ -480,15 +522,65 @@ const MODE_INSTRUCTIONS: Record<string, string> = {
   general: VICTOR_SYSTEM_INSTRUCTION,
 };
 
-// Model selection helper with automated graceful fallback and native code execution
-async function getActiveStream(contents: any[], systemInstruction: string) {
-  const modelsToTry = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+// Search intent detection helper
+function shouldEnableSearch(requested: boolean | undefined, latestContent: string): boolean {
+  if (typeof requested === "boolean") {
+    return requested;
+  }
+  const lower = (latestContent || "").toLowerCase();
+  return (
+    lower.includes("search the web") ||
+    lower.includes("search google") ||
+    lower.includes("browse the web") ||
+    lower.includes("latest news") ||
+    lower.includes("who won") ||
+    lower.includes("what is the weather") ||
+    lower.includes("weather in") ||
+    lower.includes("today's") ||
+    lower.includes("current stock") ||
+    lower.includes("stock price")
+  );
+}
+
+// Model selection helper with automated graceful fallback, Google Search grounding, and code execution
+async function getActiveStream(
+  contents: any[],
+  systemInstruction: string,
+  enableSearch: boolean = false
+) {
   const ai = getGenAI();
   let lastError: unknown = null;
 
-  for (const model of modelsToTry) {
+  // When search grounding is enabled, prioritize gemini-3.8-flash which natively supports googleSearch
+  const modelsToTry = enableSearch
+    ? ["gemini-3.8-flash", PRIMARY_MODEL, ...FALLBACK_MODELS]
+    : [PRIMARY_MODEL, ...FALLBACK_MODELS];
+
+  const uniqueModels = Array.from(new Set(modelsToTry));
+
+  for (const model of uniqueModels) {
+    // 1. If web search grounding is enabled, attempt with googleSearch tool
+    if (enableSearch) {
+      try {
+        console.log(`[Victor Web Search] Requesting streaming search with ${model}...`);
+        const searchStream = await ai.models.generateContentStream({
+          model,
+          contents,
+          config: {
+            systemInstruction,
+            tools: [{ googleSearch: {} }],
+          },
+        });
+        return { responseStream: searchStream, model, searchActive: true };
+      } catch (searchErr: any) {
+        console.warn(
+          `[Victor Web Search] Model ${model} with googleSearch had notice (${searchErr?.status || searchErr?.message}). Retrying fallback without search...`
+        );
+      }
+    }
+
+    // 2. Attempt with native Gemini code execution tool
     try {
-      // First attempt: with native Gemini code execution tool
       const responseStream = await ai.models.generateContentStream({
         model,
         contents,
@@ -497,7 +589,7 @@ async function getActiveStream(contents: any[], systemInstruction: string) {
           tools: [{ codeExecution: {} }],
         },
       });
-      return { responseStream, model };
+      return { responseStream, model, searchActive: false };
     } catch (err: any) {
       console.warn(
         `[Victor Model Stream] Model ${model} with tools had notice (${err?.status || err?.message}). Retrying without tool flag...`
@@ -510,7 +602,7 @@ async function getActiveStream(contents: any[], systemInstruction: string) {
             systemInstruction,
           },
         });
-        return { responseStream: fallbackStream, model };
+        return { responseStream: fallbackStream, model, searchActive: false };
       } catch (innerErr: any) {
         lastError = innerErr;
         console.warn(
@@ -525,7 +617,7 @@ async function getActiveStream(contents: any[], systemInstruction: string) {
 
 // Streaming Chat API endpoint
 app.post("/api/chat", async (req: Request, res: Response) => {
-  const { messages, customInstruction, personalizationContext } = req.body;
+  const { messages, customInstruction, personalizationContext, webSearch, atelierContext } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -542,12 +634,19 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     baseInstruction += "\n\n" + personalizationContext.trim();
   }
 
+  if (typeof atelierContext === "string" && atelierContext.trim()) {
+    baseInstruction += "\n\n" + atelierContext.trim();
+  }
+
   const selectedInstruction = baseInstruction;
 
   const contents = validation.data.map((m) => ({
     role: m.role,
     parts: [{ text: m.content }],
   }));
+
+  const latestMessage = validation.data[validation.data.length - 1];
+  const enableSearch = shouldEnableSearch(webSearch, latestMessage?.content || "");
 
   // Enable immediate delivery
   req.socket?.setNoDelay(true);
@@ -578,7 +677,14 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   }, 45000);
 
   try {
-    const { responseStream, model } = await getActiveStream(contents, selectedInstruction);
+    const { responseStream, model } = await getActiveStream(
+      contents,
+      selectedInstruction,
+      enableSearch
+    );
+
+    const emittedSourceUris = new Set<string>();
+    const emittedQueries = new Set<string>();
 
     for await (const chunk of responseStream) {
       if (isAborted || res.writableEnded) {
@@ -587,8 +693,49 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       if (chunk.text) {
         res.write(`data: ${JSON.stringify({ text: chunk.text, model })}\n\n`);
       }
-      if (chunk.candidates?.[0]?.content?.parts) {
-        for (const part of chunk.candidates[0].content.parts) {
+
+      // Grounding metadata extraction (Google Search citations and queries)
+      const candidate = chunk.candidates?.[0];
+      if (candidate?.groundingMetadata) {
+        const meta = candidate.groundingMetadata as any;
+        const newSources: Array<{ title: string; uri: string }> = [];
+
+        if (Array.isArray(meta.groundingChunks)) {
+          for (const gc of meta.groundingChunks) {
+            const uri = gc.web?.uri;
+            if (uri && !emittedSourceUris.has(uri)) {
+              emittedSourceUris.add(uri);
+              newSources.push({
+                title: gc.web?.title || uri,
+                uri,
+              });
+            }
+          }
+        }
+
+        const newQueries: string[] = [];
+        if (Array.isArray(meta.webSearchQueries)) {
+          for (const q of meta.webSearchQueries) {
+            if (typeof q === "string" && !emittedQueries.has(q)) {
+              emittedQueries.add(q);
+              newQueries.push(q);
+            }
+          }
+        }
+
+        if (newSources.length > 0 || newQueries.length > 0) {
+          res.write(
+            `data: ${JSON.stringify({
+              groundingSources: newSources.length > 0 ? newSources : undefined,
+              searchQueries: newQueries.length > 0 ? newQueries : undefined,
+              model,
+            })}\n\n`
+          );
+        }
+      }
+
+      if (candidate?.content?.parts) {
+        for (const part of candidate.content.parts) {
           if (part.executableCode) {
             res.write(`data: ${JSON.stringify({ executableCode: part.executableCode, model })}\n\n`);
           }
@@ -618,7 +765,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
 // Fallback non-streaming endpoint
 app.post("/api/chat/sync", async (req: Request, res: Response) => {
-  const { messages, customInstruction, personalizationContext } = req.body;
+  const { messages, customInstruction, personalizationContext, webSearch } = req.body;
 
   const validation = validateMessagesPayload(messages);
   if (!validation.valid || !validation.data) {
@@ -642,11 +789,54 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
     parts: [{ text: m.content }],
   }));
 
-  const modelsToTry = [PRIMARY_MODEL, ...FALLBACK_MODELS];
+  const latestMessage = validation.data[validation.data.length - 1];
+  const enableSearch = shouldEnableSearch(webSearch, latestMessage?.content || "");
+
+  const modelsToTry = enableSearch
+    ? ["gemini-3.8-flash", PRIMARY_MODEL, ...FALLBACK_MODELS]
+    : [PRIMARY_MODEL, ...FALLBACK_MODELS];
+  const uniqueModels = Array.from(new Set(modelsToTry));
+
   const ai = getGenAI();
   let lastError: unknown = null;
 
-  for (const model of modelsToTry) {
+  for (const model of uniqueModels) {
+    if (enableSearch) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents,
+          config: {
+            systemInstruction: selectedInstruction,
+            tools: [{ googleSearch: {} }],
+          },
+        });
+
+        const meta = response.candidates?.[0]?.groundingMetadata as any;
+        const groundingSources: Array<{ title: string; uri: string }> = [];
+        if (Array.isArray(meta?.groundingChunks)) {
+          for (const gc of meta.groundingChunks) {
+            if (gc.web?.uri) {
+              groundingSources.push({
+                title: gc.web?.title || gc.web.uri,
+                uri: gc.web.uri,
+              });
+            }
+          }
+        }
+
+        res.json({
+          text: response.text || "",
+          model,
+          groundingSources: groundingSources.length > 0 ? groundingSources : undefined,
+          searchQueries: meta?.webSearchQueries,
+        });
+        return;
+      } catch (searchErr) {
+        console.warn(`[Sync Fallback] Search on ${model} failed:`, searchErr);
+      }
+    }
+
     try {
       const response = await ai.models.generateContent({
         model,
@@ -682,10 +872,15 @@ server.on("upgrade", (request, socket, head) => {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit("connection", ws, request);
       });
+      return;
     }
+    // Cleanly close non-live WebSocket upgrade requests (e.g. Vite HMR when disabled)
+    socket.destroy();
   } catch (err) {
     console.warn("[Live WS Upgrade Error]:", err);
-    socket.destroy();
+    try {
+      socket.destroy();
+    } catch {}
   }
 });
 
@@ -693,6 +888,7 @@ wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
   const host = req.headers.host || "localhost";
   const parsedUrl = new URL(req.url || "", `http://${host}`);
   const requestedVoice = parsedUrl.searchParams.get("voice") || "Zephyr";
+  const customMemories = parsedUrl.searchParams.get("memories") || "";
 
   const validVoices = ["Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede"];
   const voiceName = validVoices.includes(requestedVoice) ? requestedVoice : "Zephyr";
@@ -703,6 +899,10 @@ wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
   try {
     const ai = getGenAI();
     console.log(`[Gemini Live] Initializing bidirectional session (Voice: ${voiceName})...`);
+
+    const liveSystemInstruction = customMemories.trim()
+      ? `${VICTOR_SYSTEM_INSTRUCTION}\n\n${customMemories.trim()}`
+      : VICTOR_SYSTEM_INSTRUCTION;
 
     liveSession = await ai.live.connect({
       model: "gemini-3.8-live",
@@ -715,7 +915,7 @@ wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
             },
           },
         },
-        systemInstruction: VICTOR_SYSTEM_INSTRUCTION,
+        systemInstruction: liveSystemInstruction,
       },
       callbacks: {
         onopen: () => {
@@ -827,10 +1027,13 @@ wss.on("connection", async (clientWs: WebSocket, req: http.IncomingMessage) => {
 });
 
 async function startServer() {
-  // Vite middleware in development
+  // Vite middleware in development (HMR disabled in AI Studio preview environment)
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);

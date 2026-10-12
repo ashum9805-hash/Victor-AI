@@ -18,6 +18,8 @@ import {
   CheckSquare,
   Radio,
   Download,
+  Globe,
+  Layers,
 } from 'lucide-react';
 import {
   ChatMessage,
@@ -26,19 +28,32 @@ import {
   UserTask,
   ActionExecution,
   CodeExecutionInfo,
+  GroundingSource,
   UserProfile,
   PersonalizationSettings,
+  AtelierProject,
 } from './types';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessageItem } from './components/ChatMessageItem';
 import { MathToolbar } from './components/MathToolbar';
 import { PromptSuggestions } from './components/PromptSuggestions';
 import { TaskDrawer } from './components/TaskDrawer';
+import { AtelierDrawer } from './components/AtelierDrawer';
 import { JarvisLiveModal } from './components/JarvisLiveModal';
 import { VoiceSettingsModal } from './components/VoiceSettingsModal';
 import { SignInModal } from './components/SignInModal';
 import { SettingsModal } from './components/SettingsModal';
 import { EmailConfirmModal } from './components/EmailConfirmModal';
+import {
+  getAtelierProjects,
+  saveAtelierProjects,
+  getActiveProjectId,
+  setActiveProjectId,
+  addProjectNote,
+  buildAtelierContext,
+  syncAtelierWithServer,
+  saveAtelierProjectsToServer,
+} from './utils/atelierService';
 import {
   getStoredUserProfile,
   setStoredUserProfile,
@@ -257,6 +272,14 @@ export default function App() {
   const [isVoiceSettingsOpen, setIsVoiceSettingsOpen] = useState(false);
   const [isSignInModalOpen, setIsSignInModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAtelierOpen, setIsAtelierOpen] = useState(false);
+  const [projects, setProjects] = useState<AtelierProject[]>(() => getAtelierProjects());
+  const [activeProjectId, setActiveProjectIdState] = useState<string | null>(() => getActiveProjectId());
+
+  const handleSelectProject = (id: string | null) => {
+    setActiveProjectId(id);
+    setActiveProjectIdState(id);
+  };
   const [pendingEmailPayload, setPendingEmailPayload] = useState<SendEmailPayload | null>(null);
   const [isEmailConfirmOpen, setIsEmailConfirmOpen] = useState(false);
   const [settingsModalTab, setSettingsModalTab] = useState<'appearance' | 'personalization' | 'voice' | 'account' | 'shortcuts' | undefined>(undefined);
@@ -264,6 +287,25 @@ export default function App() {
   const [personalizationSettings, setPersonalizationSettings] = useState<PersonalizationSettings>(() => getPersonalizationSettings());
   const [isMicListening, setIsMicListening] = useState(false);
   const speechStopRef = useRef<(() => void) | null>(null);
+
+  const [enableWebSearch, setEnableWebSearch] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('victor_web_search_enabled');
+      return saved !== null ? saved === 'true' : true;
+    } catch {
+      return true;
+    }
+  });
+
+  const toggleWebSearch = () => {
+    setEnableWebSearch((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('victor_web_search_enabled', String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     try {
@@ -297,6 +339,7 @@ export default function App() {
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const chatFeedRef = useRef<HTMLElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Sync with server sessions on mount when user is signed in
@@ -377,6 +420,18 @@ export default function App() {
       })
       .catch((err) => {
         console.warn('Could not sync personalization from server:', err);
+      });
+  }, [currentUser?.email]);
+
+  // Sync Atelier workspaces & projects with server when user signs in
+  useEffect(() => {
+    if (!currentUser?.email) return;
+    syncAtelierWithServer(currentUser.email)
+      .then((serverProjects) => {
+        setProjects(serverProjects);
+      })
+      .catch((err) => {
+        console.warn('Could not sync Atelier projects from server:', err);
       });
   }, [currentUser?.email]);
 
@@ -567,6 +622,17 @@ export default function App() {
           if (currentUser?.email) {
             syncPersonalizationWithServer(currentUser.email).catch(() => {});
           }
+        } else if ((act.type === 'save_project_note' || act.type === 'save_note') && act.title) {
+          const targetId = activeProjectId || currentSession?.projectId || projects[0]?.id;
+          if (targetId) {
+            const res = addProjectNote(targetId, act.title, act.content || '');
+            if (res) {
+              setProjects(res.updatedProjects);
+              if (currentUser?.email) {
+                saveAtelierProjectsToServer(res.updatedProjects, currentUser.email);
+              }
+            }
+          }
         } else if (act.type === 'send_email') {
           // Prepare for explicit user confirmation per security guidelines
           if (act.to && act.subject) {
@@ -699,14 +765,33 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
-  // Auto-scroll when messages update
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  // Auto-scroll inside chat feed container directly without scrolling window/ancestors
+  const scrollToBottom = (smooth: boolean = true) => {
+    if (chatFeedRef.current) {
+      chatFeedRef.current.scrollTo({
+        top: chatFeedRef.current.scrollHeight,
+        behavior: smooth ? 'smooth' : 'auto',
+      });
+    }
+    // Prevent any unwanted window scroll offset on desktop/school PCs
+    if (typeof window !== 'undefined' && window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
   };
 
   useEffect(() => {
-    scrollToBottom();
+    scrollToBottom(true);
   }, [currentSession?.messages, isGenerating]);
+
+  // When switching chats, instantly reset scroll to bottom of the feed container without animated jumping
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.scrollTo(0, 0);
+    }
+    requestAnimationFrame(() => {
+      scrollToBottom(false);
+    });
+  }, [currentSessionId]);
 
   // Auto-resize textarea
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -725,6 +810,9 @@ export default function App() {
       handleStopGeneration();
     }
     const fresh = createNewSession(mode, currentSession?.greetingIndex);
+    if (activeProjectId) {
+      fresh.projectId = activeProjectId;
+    }
     setSessions((prev) => [fresh, ...prev]);
     setCurrentSessionId(fresh.id);
     setInputPrompt('');
@@ -732,6 +820,34 @@ export default function App() {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
+  };
+
+  const handleStartProjectChat = (project: AtelierProject) => {
+    handleSelectProject(project.id);
+    if (isGenerating) {
+      handleStopGeneration();
+    }
+    const newSessionId = 'session_' + Date.now();
+    const newSession: ChatSession = {
+      id: newSessionId,
+      title: `${project.icon || '📁'} ${project.title}`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      mode: 'casual',
+      messages: [
+        {
+          id: 'greeting_' + Date.now(),
+          role: 'assistant',
+          content: `Welcome to your **${project.title}** Atelier workspace! I've loaded your reference notes and custom directives into context. What would you like to work on, research, or outline today?`,
+          timestamp: Date.now(),
+        },
+      ],
+      projectId: project.id,
+    };
+    setSessions((prev) => [newSession, ...prev]);
+    setCurrentSessionId(newSessionId);
+    setInputPrompt('');
+    setErrorBanner(null);
   };
 
   const handleShuffleGreeting = () => {
@@ -844,6 +960,14 @@ export default function App() {
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
+    const targetProject =
+      projects.find(
+        (p) => p.id === (currentSession?.projectId || activeProjectId)
+      ) || null;
+    const atelierContext = targetProject
+      ? buildAtelierContext(targetProject)
+      : undefined;
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -857,6 +981,8 @@ export default function App() {
           })),
           mode: currentSession.mode,
           personalizationContext: buildPersonalizationContext(personalizationSettings),
+          webSearch: enableWebSearch,
+          atelierContext,
         }),
         signal: abortController.signal,
       });
@@ -874,14 +1000,14 @@ export default function App() {
       const decoder = new TextDecoder('utf-8');
       let accumulatedText = '';
       let accumulatedCodeExecutions: CodeExecutionInfo[] = [];
+      let accumulatedGroundingSources: GroundingSource[] = [];
+      let accumulatedSearchQueries: string[] = [];
       let buffer = '';
       let rafId: number | null = null;
       let lastFlushedLength = 0;
 
       // Batch state updates to 60fps display refresh instead of on every 2-character chunk
       const flushUpdate = () => {
-        if (accumulatedText.length === lastFlushedLength) return;
-        lastFlushedLength = accumulatedText.length;
         const currentText = accumulatedText;
         setSessions((prev) =>
           prev.map((s) => {
@@ -896,6 +1022,14 @@ export default function App() {
                         codeExecutions:
                           accumulatedCodeExecutions.length > 0
                             ? [...accumulatedCodeExecutions]
+                            : undefined,
+                        groundingSources:
+                          accumulatedGroundingSources.length > 0
+                            ? [...accumulatedGroundingSources]
+                            : undefined,
+                        searchQueries:
+                          accumulatedSearchQueries.length > 0
+                            ? [...accumulatedSearchQueries]
                             : undefined,
                       }
                     : m,
@@ -960,6 +1094,22 @@ export default function App() {
               }
               scheduleFlush();
             }
+            if (Array.isArray(parsed.groundingSources)) {
+              for (const src of parsed.groundingSources) {
+                if (src.uri && !accumulatedGroundingSources.some((s) => s.uri === src.uri)) {
+                  accumulatedGroundingSources.push(src);
+                }
+              }
+              scheduleFlush();
+            }
+            if (Array.isArray(parsed.searchQueries)) {
+              for (const q of parsed.searchQueries) {
+                if (typeof q === 'string' && !accumulatedSearchQueries.includes(q)) {
+                  accumulatedSearchQueries.push(q);
+                }
+              }
+              scheduleFlush();
+            }
           } catch (e: any) {
             if (e.message && e.message !== 'Unexpected end of JSON input') {
               console.warn('Error parsing stream event', e);
@@ -1009,6 +1159,14 @@ export default function App() {
                       codeExecutions:
                         accumulatedCodeExecutions.length > 0
                           ? accumulatedCodeExecutions
+                          : undefined,
+                      groundingSources:
+                        accumulatedGroundingSources.length > 0
+                          ? accumulatedGroundingSources
+                          : undefined,
+                      searchQueries:
+                        accumulatedSearchQueries.length > 0
+                          ? accumulatedSearchQueries
                           : undefined,
                     }
                   : m,
@@ -1154,6 +1312,7 @@ export default function App() {
       body: JSON.stringify({
         messages: updatedMessages.map((m) => ({ role: m.role, content: m.content })),
         personalizationContext: buildPersonalizationContext(personalizationSettings),
+        webSearch: enableWebSearch,
       }),
     });
 
@@ -1264,6 +1423,10 @@ export default function App() {
           setIsSettingsOpen(true);
         }}
         onSignOut={handleSignOut}
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onSelectProject={handleSelectProject}
+        onOpenAtelier={() => setIsAtelierOpen(true)}
       />
 
       {/* Main chat view */}
@@ -1291,11 +1454,49 @@ export default function App() {
               <span className="font-semibold text-sm sm:text-base text-zinc-900 dark:text-zinc-100 tracking-tight">
                 Victor
               </span>
+              <span
+                id="header-web-grounded-pill"
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-[11px] font-medium text-emerald-700 dark:text-emerald-300"
+                title="Google Search Grounding Active - Up-to-date real-time web knowledge"
+              >
+                <Globe className="w-3 h-3 text-emerald-500" />
+                <span>Web Search</span>
+              </span>
             </div>
           </div>
 
-          {/* Controls: Live Voice, Missions, Theme Toggle */}
+          {/* Controls: Live Voice, Missions, Atelier, Theme Toggle */}
           <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Atelier Studio Button */}
+            {(() => {
+              const currentActiveProj = projects.find(
+                (p) => p.id === (currentSession?.projectId || activeProjectId)
+              );
+              return (
+                <button
+                  id="header-atelier-btn"
+                  type="button"
+                  onClick={() => setIsAtelierOpen(true)}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-medium active:scale-95 transition-all cursor-pointer ${
+                    currentActiveProj
+                      ? 'bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-300 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 shadow-2xs'
+                      : 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200'
+                  }`}
+                  title={
+                    currentActiveProj
+                      ? `Active Workspace: ${currentActiveProj.title} · Click to open Atelier studio`
+                      : 'Open Atelier Workspaces & Notebook Studio'
+                  }
+                >
+                  <Layers className={`w-3.5 h-3.5 ${currentActiveProj ? 'text-indigo-600 dark:text-indigo-400' : 'text-indigo-500'}`} />
+                  <span className="hidden sm:inline truncate max-w-[120px]">
+                    {currentActiveProj ? currentActiveProj.title : 'Atelier'}
+                  </span>
+                  <span className="sm:hidden">Atelier</span>
+                </button>
+              );
+            })()}
+
             {/* Live Voice Button */}
             <button
               id="header-live-voice-btn"
@@ -1348,6 +1549,7 @@ export default function App() {
 
         {/* Chat Feed */}
         <main
+          ref={chatFeedRef}
           id="chat-feed-container"
           className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-4 space-y-4"
         >
@@ -1389,7 +1591,7 @@ export default function App() {
               />
             </div>
           ) : (
-            <div className="max-w-3xl mx-auto space-y-3">
+            <div className="max-w-3xl mx-auto space-y-3 w-full min-w-0">
               {currentSession.messages.map((message, idx) => {
                 const isLatestAssistant =
                   message.role === 'assistant' &&
@@ -1416,7 +1618,7 @@ export default function App() {
                   <span>Thinking and drafting response...</span>
                 </div>
               )}
-              <div ref={messagesEndRef} />
+              <div ref={messagesEndRef} className="h-px w-full" />
             </div>
           )}
         </main>
@@ -1424,7 +1626,7 @@ export default function App() {
         {/* Input Bar Section */}
         <footer
           id="chat-input-footer"
-          className="mt-auto shrink-0 w-full border-t border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3 sm:p-4 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] transition-colors z-10"
+          className="shrink-0 w-full border-t border-zinc-200/80 dark:border-zinc-800 bg-white dark:bg-zinc-950 p-3 sm:p-4 pb-[calc(0.75rem+env(safe-area-inset-bottom,0px))] transition-colors z-10"
         >
           <div className="max-w-3xl mx-auto">
             {/* Math symbols quick-toolbar */}
@@ -1454,7 +1656,30 @@ export default function App() {
               {/* Bottom bar of input */}
               <div className="flex items-center justify-between px-3 py-2 border-t border-zinc-200/40 dark:border-zinc-800/80 text-xs">
                 {/* Secondary toolbar buttons */}
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    type="button"
+                    id="toggle-web-search-btn"
+                    aria-label={enableWebSearch ? 'Disable Web Search Grounding' : 'Enable Web Search Grounding'}
+                    onClick={toggleWebSearch}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-[11px] cursor-pointer ${
+                      enableWebSearch
+                        ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-medium border border-blue-300 dark:border-blue-800 shadow-2xs'
+                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800'
+                    }`}
+                    title={
+                      enableWebSearch
+                        ? 'Google Search Grounding active: Answers will verify against live web sources'
+                        : 'Click to enable real-time Google Search grounding & sources'
+                    }
+                  >
+                    <Globe className={`w-3.5 h-3.5 ${enableWebSearch ? 'text-blue-600 dark:text-blue-400' : ''}`} />
+                    <span>Web Search</span>
+                    {enableWebSearch && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-blue-600 dark:bg-blue-400 animate-pulse" />
+                    )}
+                  </button>
+
                   <button
                     type="button"
                     id="toggle-math-symbols-btn"
@@ -1471,7 +1696,7 @@ export default function App() {
                     <span>Math Symbols</span>
                   </button>
 
-                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 hidden sm:inline ml-2">
+                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 hidden sm:inline ml-1">
                     Shift+Enter for new line · Ctrl+K for new chat
                   </span>
                 </div>
@@ -1545,6 +1770,39 @@ export default function App() {
         onOpenSignIn={() => setIsSignInModalOpen(true)}
       />
 
+      {/* Atelier Workspaces & Projects Drawer */}
+      <AtelierDrawer
+        isOpen={isAtelierOpen}
+        onClose={() => setIsAtelierOpen(false)}
+        projects={projects}
+        onProjectsChange={(updatedProjects) => {
+          setProjects(updatedProjects);
+          saveAtelierProjects(updatedProjects);
+          if (currentUser?.email) {
+            saveAtelierProjectsToServer(updatedProjects, currentUser.email);
+          }
+        }}
+        activeProjectId={activeProjectId}
+        onSelectProject={handleSelectProject}
+        onStartProjectChat={handleStartProjectChat}
+        tasks={tasks}
+        onToggleTask={handleToggleTask}
+        onAddTask={(title, projId) => {
+          const newTask: UserTask = {
+            id: 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            title,
+            category: 'projects',
+            priority: 'medium',
+            completed: false,
+            createdAt: Date.now(),
+            projectId: projId || activeProjectId || undefined,
+          };
+          const updated = [newTask, ...tasks];
+          setTasks(updated);
+          persistTasks(updated);
+        }}
+      />
+
       {/* Jarvis Full-Screen Live Voice HUD Modal */}
       <JarvisLiveModal
         isOpen={isLiveModalOpen}
@@ -1582,6 +1840,8 @@ export default function App() {
             syncPersonalizationWithServer(currentUser.email).catch(() => {});
           }
         }}
+        enableWebSearch={enableWebSearch}
+        onToggleWebSearch={toggleWebSearch}
       />
 
       {/* Sign In & Account Management Modal */}

@@ -19,6 +19,9 @@ import {
   FileText,
   Calendar,
   ExternalLink,
+  Globe,
+  Search,
+  BookOpen,
 } from 'lucide-react';
 import { ChatMessage } from '../types';
 import { speakText, stopSpeaking, isSpeechSynthesisSupported } from '../utils/voiceService';
@@ -215,6 +218,8 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
                         <Calendar className="w-3.5 h-3.5 text-emerald-500" />
                       ) : act.type === 'send_email' || act.type === 'draft_email' || act.type === 'read_emails' ? (
                         <Mail className="w-3.5 h-3.5 text-red-500" />
+                      ) : act.type === 'save_project_note' ? (
+                        <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
                       ) : (
                         <CheckSquare className="w-3.5 h-3.5 text-cyan-500" />
                       )}
@@ -225,6 +230,7 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
                       {act.type === 'delete_task' && `Removed: "${act.title}"`}
                       {act.type === 'set_theme' && `Switched to ${act.theme} mode`}
                       {act.type === 'save_note' && `Saved note: "${act.title}"`}
+                      {act.type === 'save_project_note' && `Saved to Atelier: "${act.title || 'Workspace Note'}"`}
                       {act.type === 'send_email' && `Ready to send email to ${act.to || 'recipient'}`}
                       {act.type === 'draft_email' && `Drafted email for ${act.to || 'recipient'}`}
                       {act.type === 'read_emails' && `Checking Gmail inbox`}
@@ -338,6 +344,55 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
                 {cleanContent}
               </ReactMarkdown>
             </div>
+
+            {/* Web Search Grounding Sources & Queries */}
+            {((message.groundingSources && message.groundingSources.length > 0) ||
+              (message.searchQueries && message.searchQueries.length > 0)) && (
+              <div className="mt-2.5 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/70">
+                {message.searchQueries && message.searchQueries.length > 0 && (
+                  <div className="flex items-center gap-1.5 mb-2 text-[11px] text-zinc-500 dark:text-zinc-400 flex-wrap">
+                    <Search className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                    <span className="font-medium">Google Search:</span>
+                    {message.searchQueries.map((query, qIdx) => (
+                      <span
+                        key={qIdx}
+                        className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-[11px] font-mono border border-zinc-200/60 dark:border-zinc-700/60"
+                      >
+                        "{query}"
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {message.groundingSources && message.groundingSources.length > 0 && (
+                  <>
+                    <div className="flex items-center gap-1.5 mb-2 text-[11px] font-semibold text-zinc-600 dark:text-zinc-300">
+                      <Globe className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                      <span>Sources & Grounded Citations</span>
+                      <span className="text-[10px] font-normal text-zinc-400 dark:text-zinc-500">
+                        ({message.groundingSources.length})
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {message.groundingSources.map((source, sIdx) => (
+                        <a
+                          key={sIdx}
+                          href={source.uri}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800/80 dark:hover:bg-zinc-700/80 text-zinc-700 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700/60 transition-colors max-w-xs truncate group"
+                          title={source.title || source.uri}
+                        >
+                          <span className="truncate group-hover:text-blue-600 dark:group-hover:text-blue-400">
+                            {source.title || source.uri}
+                          </span>
+                          <ExternalLink className="w-3 h-3 text-zinc-400 shrink-0 group-hover:text-blue-500" />
+                        </a>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="text-zinc-900 dark:text-zinc-100 text-sm sm:text-base whitespace-pre-wrap leading-relaxed">
@@ -352,6 +407,8 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
     prevProps.message.error === nextProps.message.error &&
+    prevProps.message.groundingSources?.length === nextProps.message.groundingSources?.length &&
+    prevProps.message.searchQueries?.length === nextProps.message.searchQueries?.length &&
     prevProps.isLatestAssistantMessage === nextProps.isLatestAssistantMessage
   );
 });

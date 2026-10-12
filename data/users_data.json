@@ -1,0 +1,15 @@
+{
+  "test@example.com": {
+    "email": "test@example.com",
+    "tasks": [],
+    "sessions": [],
+    "projects": [
+      {
+        "id": "test_1",
+        "title": "Test Studio",
+        "notes": []
+      }
+    ],
+    "updatedAt": 1791781451131
+  }
+}

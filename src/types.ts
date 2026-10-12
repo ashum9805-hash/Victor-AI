@@ -28,6 +28,7 @@ export interface UserTask {
   completed: boolean;
   createdAt: number;
   completedAt?: number;
+  projectId?: string;
 }
 
 export interface UserNote {
@@ -35,6 +36,25 @@ export interface UserNote {
   title: string;
   content: string;
   createdAt: number;
+}
+
+export interface ProjectNote {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AtelierProject {
+  id: string;
+  title: string;
+  description?: string;
+  icon?: string;
+  customInstructions?: string;
+  notes: ProjectNote[];
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface UserProfile {
@@ -59,7 +79,8 @@ export interface ActionExecution {
     | 'read_emails'
     | 'create_doc'
     | 'create_calendar_event'
-    | 'read_calendar';
+    | 'read_calendar'
+    | 'save_project_note';
   title?: string;
   category?: 'projects' | 'code' | 'general' | 'personal' | 'learning' | 'college' | 'application';
   priority?: 'high' | 'medium' | 'low';
@@ -75,6 +96,7 @@ export interface ActionExecution {
   endDateTime?: string;
   link?: string;
   raw?: string;
+  projectId?: string;
 }
 
 export interface CodeExecutionInfo {
@@ -82,6 +104,11 @@ export interface CodeExecutionInfo {
   code: string;
   outcome?: string;
   output?: string;
+}
+
+export interface GroundingSource {
+  title?: string;
+  uri: string;
 }
 
 export interface ChatMessage {
@@ -93,6 +120,8 @@ export interface ChatMessage {
   error?: boolean;
   actions?: ActionExecution[];
   codeExecutions?: CodeExecutionInfo[];
+  groundingSources?: GroundingSource[];
+  searchQueries?: string[];
 }
 
 export interface ChatSession {
@@ -103,6 +132,7 @@ export interface ChatSession {
   mode: ChatMode;
   messages: ChatMessage[];
   greetingIndex?: number;
+  projectId?: string;
 }
 
 export interface MathSymbol {

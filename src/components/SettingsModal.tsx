@@ -21,6 +21,7 @@ import {
   Plus,
   ChevronRight,
   ArrowLeft,
+  Globe,
 } from 'lucide-react';
 import { UserProfile, PersonalizationSettings } from '../types';
 import {
@@ -58,6 +59,8 @@ interface SettingsModalProps {
   tasksCount?: number;
   initialTab?: SettingsSectionId;
   onPersonalizationChange?: (settings: PersonalizationSettings) => void;
+  enableWebSearch?: boolean;
+  onToggleWebSearch?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -73,6 +76,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   tasksCount = 0,
   initialTab,
   onPersonalizationChange,
+  enableWebSearch = true,
+  onToggleWebSearch,
 }) => {
   // If activeSection is null, show the clean vertical hub list.
   // When clicked, drill into the selected section's detailed view.
@@ -546,6 +551,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   />
                 </button>
               </div>
+
+              {/* Real-Time Google Search Grounding Toggle */}
+              {onToggleWebSearch && (
+                <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/60 flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Globe className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+                      <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                        Real-Time Google Search Grounding
+                      </span>
+                      <span
+                        className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${
+                          enableWebSearch
+                            ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800'
+                            : 'bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700'
+                        }`}
+                      >
+                        {enableWebSearch ? 'Active' : 'Disabled'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-600 dark:text-zinc-400 leading-relaxed max-w-lg">
+                      Enables real-time web verification for breaking news, scores, current documentation, and factual questions. Victor automatically extracts and displays clickable citation sources.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={onToggleWebSearch}
+                    role="switch"
+                    aria-checked={enableWebSearch}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                      enableWebSearch ? 'bg-blue-600' : 'bg-zinc-300 dark:bg-zinc-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                        enableWebSearch ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              )}
 
               {/* Custom Guidance & Response Style */}
               <div className="space-y-2">
