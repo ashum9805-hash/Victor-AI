@@ -4,25 +4,100 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>
-      // Suppress Vite HMR WebSocket connection errors in AI Studio where HMR is disabled
-      window.addEventListener('error', function(e) {
-        var msg = e && (e.message || (e.error && e.error.message) || '');
-        var file = (e && e.filename) || '';
-        if (
-          (msg && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) ||
-          (file && file.indexOf('@vite/client') !== -1)
-        ) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
+      (function() {
+        // Intercept Vite HMR WebSocket in AI Studio per environment constraint: "HMR: Disabled. Ignore WebSocket errors."
+        var OrigWS = window.WebSocket;
+        if (typeof OrigWS !== 'undefined') {
+          window.WebSocket = function(url, protocols) {
+            var protoStr = '';
+            if (typeof protocols === 'string') protoStr = protocols;
+            else if (Array.isArray(protocols)) protoStr = protocols.join(' ');
+
+            if (protoStr.indexOf('vite-hmr') !== -1 || (url && String(url).indexOf('/@vite') !== -1)) {
+              var listeners = {};
+              var mockWs = {
+                binaryType: 'blob',
+                readyState: 1, // WebSocket.OPEN
+                bufferedAmount: 0,
+                extensions: '',
+                protocol: 'vite-hmr',
+                url: String(url),
+                send: function() {},
+                close: function() {},
+                addEventListener: function(type, fn) {
+                  listeners[type] = listeners[type] || [];
+                  listeners[type].push(fn);
+                  if (type === 'open') {
+                    setTimeout(function() {
+                      try { fn({ type: 'open', target: mockWs }); } catch (err) {}
+                    }, 0);
+                  }
+                },
+                removeEventListener: function(type, fn) {
+                  if (!listeners[type]) return;
+                  listeners[type] = listeners[type].filter(function(f) { return f !== fn; });
+                },
+                dispatchEvent: function() { return true; },
+                onopen: null,
+                onmessage: null,
+                onerror: null,
+                onclose: null
+              };
+              setTimeout(function() {
+                if (typeof mockWs.onopen === 'function') {
+                  try { mockWs.onopen({ type: 'open', target: mockWs }); } catch (err) {}
+                }
+              }, 0);
+              return mockWs;
+            }
+            return new OrigWS(url, protocols);
+          };
+          window.WebSocket.prototype = OrigWS.prototype;
+          window.WebSocket.CONNECTING = 0;
+          window.WebSocket.OPEN = 1;
+          window.WebSocket.CLOSING = 2;
+          window.WebSocket.CLOSED = 3;
         }
-      }, true);
-      window.addEventListener('unhandledrejection', function(e) {
-        var reason = e.reason ? (e.reason.message || String(e.reason)) : '';
-        if (reason && (reason.indexOf('WebSocket') !== -1 || reason.indexOf('closed without opened') !== -1)) {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-        }
-      });
+
+        // Intercept console.error to prevent benign Vite HMR disconnects from triggering AI Studio error flags
+        var origConsoleError = console.error;
+        console.error = function() {
+          var str = '';
+          for (var i = 0; i < arguments.length; i++) {
+            var arg = arguments[i];
+            str += ' ' + ((arg && (arg.message || arg.stack || String(arg))) || '');
+          }
+          if (
+            str.indexOf('closed without opened') !== -1 ||
+            (str.indexOf('[vite]') !== -1 && (str.indexOf('WebSocket') !== -1 || str.indexOf('connection lost') !== -1)) ||
+            (str.indexOf('WebSocket') !== -1 && str.indexOf('@vite/client') !== -1)
+          ) {
+            return;
+          }
+          return origConsoleError.apply(console, arguments);
+        };
+
+        // Window error listeners
+        window.addEventListener('error', function(e) {
+          var msg = e && (e.message || (e.error && e.error.message) || '');
+          var file = (e && e.filename) || '';
+          if (
+            (msg && (msg.indexOf('WebSocket') !== -1 || msg.indexOf('closed without opened') !== -1)) ||
+            (file && file.indexOf('@vite/client') !== -1)
+          ) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e.reason ? (e.reason.message || String(e.reason)) : '';
+          if (reason && (reason.indexOf('WebSocket') !== -1 || reason.indexOf('closed without opened') !== -1)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        });
+      })();
     </script>
     <title>Victor</title>
     <meta name="description" content="Victor – an intelligent personal AI assistant powered by Gemini." />

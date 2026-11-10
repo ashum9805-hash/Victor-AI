@@ -16,9 +16,18 @@ const app = express();
 const server = http.createServer(app);
 const PORT = 3000;
 
-// Model configuration - primary is ultra-fast gemini-3.5-flash-lite (<600ms latency)
+// Model configuration: primary is ultra-fast gemini-3.5-flash-lite with resilient fallbacks across separate model quotas
 const PRIMARY_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-const FALLBACK_MODELS = ["gemini-3-flash-preview"];
+const FALLBACK_MODELS = [
+  "gemini-flash-lite-latest",
+  "gemini-3.6-flash",
+  "gemini-3.8-flash",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-flash-latest",
+];
+
+
 
 // Startup validation check
 if (!process.env.GEMINI_API_KEY) {
@@ -374,6 +383,11 @@ function getGenAI(): GoogleGenAI {
     }
     aiClient = new GoogleGenAI({
       apiKey: key,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
     });
   }
   return aiClient;
@@ -513,6 +527,11 @@ When the user asks you to email someone, draft an email, draft a Google Doc, cre
 4. For Google Docs: Generate well-structured, thorough content in the \`content\` field so the document is immediately usable.
 5. For Calendar: Always use standard ISO 8601 timestamps for \`startDateTime\` and \`endDateTime\`. The current year is 2026.
 
+# TYPOGRAPHY, SPACING & FORMATTING RULES
+- Generous paragraph spacing: Always separate distinct paragraphs, explanations, list blocks, and search takeaways with full blank lines (double newlines \n\n). Never cram paragraphs or ideas together into dense walls of text.
+- Punctuation & Lists: Always place a clear space after numbers in numbered lists (e.g., "1. First point", never "1.First point"). Ensure standard punctuation with clean spaces after periods, commas, colons, and question marks.
+- Distinct Final Question: When concluding your response with a follow-up question or conversational prompt, leave two full blank lines before the final question so it stands out with generous vertical breathing room from the main response body.
+
 Important: Keep your confirmation completely natural! For example, say "I've drafted that Google Doc for you!" or "I scheduled that meeting on your calendar!" or "Done, marked that complete!" Never sound like a robot.`;
 
 // Backward-compatible instructions map
@@ -542,6 +561,21 @@ function shouldEnableSearch(requested: boolean | undefined, latestContent: strin
   );
 }
 
+function isTransientRetryable(err: any): boolean {
+  if (!err) return false;
+  const status = err?.status || err?.statusCode || err?.code;
+  // 503 and 500 are temporary server spikes where retrying the same model can succeed
+  if (status === 503 || status === 500) return true;
+  const msg = (err?.message || String(err)).toLowerCase();
+  // Quota exhaustion (429) on a specific model should NOT retry that model - route to next model!
+  if (status === 429 || msg.includes("quota") || msg.includes("resource_exhausted") || msg.includes("resource exhausted")) {
+    return false;
+  }
+  return msg.includes("503") || msg.includes("overloaded") || msg.includes("high demand");
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Model selection helper with automated graceful fallback, Google Search grounding, and code execution
 async function getActiveStream(
   contents: any[],
@@ -551,11 +585,7 @@ async function getActiveStream(
   const ai = getGenAI();
   let lastError: unknown = null;
 
-  // When search grounding is enabled, prioritize gemini-3.8-flash which natively supports googleSearch
-  const modelsToTry = enableSearch
-    ? ["gemini-3.8-flash", PRIMARY_MODEL, ...FALLBACK_MODELS]
-    : [PRIMARY_MODEL, ...FALLBACK_MODELS];
-
+  const modelsToTry = [PRIMARY_MODEL, ...FALLBACK_MODELS];
   const uniqueModels = Array.from(new Set(modelsToTry));
 
   for (const model of uniqueModels) {
@@ -573,8 +603,8 @@ async function getActiveStream(
         });
         return { responseStream: searchStream, model, searchActive: true };
       } catch (searchErr: any) {
-        console.warn(
-          `[Victor Web Search] Model ${model} with googleSearch had notice (${searchErr?.status || searchErr?.message}). Retrying fallback without search...`
+        console.log(
+          `[Victor Web Search] Search tool unavailable on ${model} (${searchErr?.status || searchErr?.message}). Falling through to standard generation...`
         );
       }
     }
@@ -591,8 +621,25 @@ async function getActiveStream(
       });
       return { responseStream, model, searchActive: false };
     } catch (err: any) {
-      console.warn(
-        `[Victor Model Stream] Model ${model} with tools had notice (${err?.status || err?.message}). Retrying without tool flag...`
+      if (isTransientRetryable(err)) {
+        await sleep(500);
+        try {
+          const retryStream = await ai.models.generateContentStream({
+            model,
+            contents,
+            config: {
+              systemInstruction,
+              tools: [{ codeExecution: {} }],
+            },
+          });
+          return { responseStream: retryStream, model, searchActive: false };
+        } catch {
+          // Proceed to plain prompt fallback
+        }
+      }
+
+      console.log(
+        `[Victor Model Stream] Model ${model} with tools note (${err?.status || err?.message}). Retrying standard prompt...`
       );
       try {
         const fallbackStream = await ai.models.generateContentStream({
@@ -604,9 +651,26 @@ async function getActiveStream(
         });
         return { responseStream: fallbackStream, model, searchActive: false };
       } catch (innerErr: any) {
-        lastError = innerErr;
-        console.warn(
-          `[Victor Model Fallback] Model ${model} failed entirely (${innerErr?.status || innerErr?.message}). Trying next available model...`
+        if (isTransientRetryable(innerErr)) {
+          await sleep(500);
+          try {
+            const retryPlain = await ai.models.generateContentStream({
+              model,
+              contents,
+              config: {
+                systemInstruction,
+              },
+            });
+            return { responseStream: retryPlain, model, searchActive: false };
+          } catch (retryErr) {
+            lastError = retryErr;
+          }
+        } else {
+          lastError = innerErr;
+        }
+
+        console.log(
+          `[Victor Model Routing] Model ${model} status (${innerErr?.status || innerErr?.message}). Routing to next candidate model...`
         );
       }
     }
@@ -792,9 +856,7 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
   const latestMessage = validation.data[validation.data.length - 1];
   const enableSearch = shouldEnableSearch(webSearch, latestMessage?.content || "");
 
-  const modelsToTry = enableSearch
-    ? ["gemini-3.8-flash", PRIMARY_MODEL, ...FALLBACK_MODELS]
-    : [PRIMARY_MODEL, ...FALLBACK_MODELS];
+  const modelsToTry = [PRIMARY_MODEL, ...FALLBACK_MODELS];
   const uniqueModels = Array.from(new Set(modelsToTry));
 
   const ai = getGenAI();
@@ -832,8 +894,8 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
           searchQueries: meta?.webSearchQueries,
         });
         return;
-      } catch (searchErr) {
-        console.warn(`[Sync Fallback] Search on ${model} failed:`, searchErr);
+      } catch (searchErr: any) {
+        console.log(`[Sync Fallback] Search note on ${model}:`, searchErr?.message || searchErr);
       }
     }
 
@@ -849,8 +911,25 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
       res.json({ text: response.text || "", model });
       return;
     } catch (err: any) {
-      lastError = err;
-      console.warn(`[Sync Fallback] Model ${model} failed:`, err?.message || err);
+      if (isTransientRetryable(err)) {
+        await sleep(500);
+        try {
+          const retryResp = await ai.models.generateContent({
+            model,
+            contents,
+            config: {
+              systemInstruction: selectedInstruction,
+            },
+          });
+          res.json({ text: retryResp.text || "", model });
+          return;
+        } catch (innerRetry) {
+          lastError = innerRetry;
+        }
+      } else {
+        lastError = err;
+      }
+      console.log(`[Sync Fallback] Model ${model} routing notice:`, err?.message || err);
     }
   }
 
@@ -863,6 +942,17 @@ app.post("/api/chat/sync", async (req: Request, res: Response) => {
 // Gemini Multimodal Live API (Bidirectional Audio)
 // ==========================================
 const wss = new WebSocketServer({ noServer: true });
+const wssBenign = new WebSocketServer({
+  noServer: true,
+  handleProtocols: (protocols) => Array.from(protocols)[0] || false,
+});
+
+wssBenign.on("connection", (ws) => {
+  // Gracefully accept benign development WebSocket connections (e.g. Vite HMR client)
+  // so the HTTP 101 Switching Protocols handshake completes cleanly and avoids
+  // "WebSocket closed without opened" / "without opening handshake" errors.
+  ws.on("error", () => {});
+});
 
 server.on("upgrade", (request, socket, head) => {
   try {
@@ -874,10 +964,12 @@ server.on("upgrade", (request, socket, head) => {
       });
       return;
     }
-    // Cleanly close non-live WebSocket upgrade requests (e.g. Vite HMR when disabled)
-    socket.destroy();
+    // Accept any other development WebSocket request cleanly with wssBenign
+    wssBenign.handleUpgrade(request, socket, head, (ws) => {
+      wssBenign.emit("connection", ws, request);
+    });
   } catch (err) {
-    console.warn("[Live WS Upgrade Error]:", err);
+    console.warn("[WS Upgrade Error]:", err);
     try {
       socket.destroy();
     } catch {}

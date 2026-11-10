@@ -35,6 +35,38 @@ interface ChatMessageItemProps {
   onOpenTaskBoard?: () => void;
 }
 
+// Format punctuation, spacing after numbers, and separate closing questions with airy vertical breathing room
+function formatTypographySpacing(content: string): string {
+  if (!content) return '';
+
+  let text = content;
+
+  // 1. Fix missing space after numbered list markers: "1.Item" -> "1. Item"
+  text = text.replace(/(^|\n)(\d+)\.([^\s\d])/g, '$1$2. $3');
+
+  // 2. Fix missing space after punctuation before words (e.g. "here.Next" -> "here. Next" or "results:here" -> "results: here")
+  text = text.replace(/([a-zA-Z0-9])\.([A-Z][a-zA-Z])/g, '$1. $2');
+  text = text.replace(/([a-zA-Z0-9]):([a-zA-Z])/g, '$1: $2');
+
+  // 3. Ensure double newline between paragraphs when only a single newline was sent
+  // In markdown, single newlines get collapsed into a single line. If a line ends with punctuation (. ! ?)
+  // and the next line begins with text or a list marker, ensure double newline.
+  text = text.replace(/([.!?])\n([A-Z0-9#*`])/g, '$1\n\n$2');
+
+  // 4. Give the final question generous vertical breathing room (2-3 vertical spaces):
+  // When the message concludes with a follow-up question or thought, separate it with extra vertical space
+  const match = text.match(/\n\s*([A-Z][^\n]*\?)\s*$/);
+  if (match && match.index !== undefined) {
+    const before = text.slice(0, match.index).trimEnd();
+    const question = match[1].trim();
+    if (before) {
+      text = `${before}\n\n\n${question}`;
+    }
+  }
+
+  return text;
+}
+
 export const ChatMessageItem = React.memo<ChatMessageItemProps>(
   ({ message, onRegenerate, onEditUserMessage, onOpenTaskBoard }) => {
     const [copied, setCopied] = useState(false);
@@ -45,7 +77,8 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
       if (!isAssistant) return { cleanContent: message.content, actions: [] };
       const parsed = parseActionsFromContent(message.content);
       const combinedActions = [...(message.actions || []), ...parsed.actions];
-      return { cleanContent: parsed.cleanContent, actions: combinedActions };
+      const formatted = formatTypographySpacing(parsed.cleanContent);
+      return { cleanContent: formatted, actions: combinedActions };
     }, [message.content, message.actions, isAssistant]);
 
     const handleCopy = async () => {
@@ -287,6 +320,62 @@ export const ChatMessageItem = React.memo<ChatMessageItemProps>(
                 remarkPlugins={[remarkMath]}
                 rehypePlugins={[rehypeKatex]}
                 components={{
+                  p({ children }) {
+                    return (
+                      <p className="my-3.5 sm:my-4 leading-relaxed text-zinc-800 dark:text-zinc-200 first:mt-0 last:mb-0">
+                        {children}
+                      </p>
+                    );
+                  },
+                  ul({ children }) {
+                    return (
+                      <ul className="my-3.5 sm:my-4 space-y-2 list-disc pl-5 sm:pl-6 text-zinc-800 dark:text-zinc-200">
+                        {children}
+                      </ul>
+                    );
+                  },
+                  ol({ children }) {
+                    return (
+                      <ol className="my-3.5 sm:my-4 space-y-2.5 list-decimal pl-5 sm:pl-6 text-zinc-800 dark:text-zinc-200">
+                        {children}
+                      </ol>
+                    );
+                  },
+                  li({ children }) {
+                    return (
+                      <li className="leading-relaxed pl-1 my-1">
+                        {children}
+                      </li>
+                    );
+                  },
+                  h1({ children }) {
+                    return (
+                      <h1 className="mt-6 mb-3 text-lg sm:text-xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100 first:mt-0">
+                        {children}
+                      </h1>
+                    );
+                  },
+                  h2({ children }) {
+                    return (
+                      <h2 className="mt-5 mb-2.5 text-base sm:text-lg font-semibold tracking-tight text-zinc-900 dark:text-zinc-100 first:mt-0">
+                        {children}
+                      </h2>
+                    );
+                  },
+                  h3({ children }) {
+                    return (
+                      <h3 className="mt-4 mb-2 text-sm sm:text-base font-semibold text-zinc-900 dark:text-zinc-100 first:mt-0">
+                        {children}
+                      </h3>
+                    );
+                  },
+                  blockquote({ children }) {
+                    return (
+                      <blockquote className="my-4 border-l-3 border-zinc-300 dark:border-zinc-700 pl-4 py-1 italic text-zinc-600 dark:text-zinc-400">
+                        {children}
+                      </blockquote>
+                    );
+                  },
                   code(props) {
                     const { children, className } = props;
                     const match = /language-(\w+)/.exec(className || '');

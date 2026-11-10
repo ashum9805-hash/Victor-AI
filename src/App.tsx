@@ -249,7 +249,36 @@ export default function App() {
 
   const [inputPrompt, setInputPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  
+  // Sidebar open/collapse state (persisted in localStorage, defaults open on large desktop)
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = localStorage.getItem('victor_sidebar_open');
+        if (saved !== null) return saved === 'true';
+        return window.innerWidth >= 1024;
+      }
+    } catch {}
+    return false;
+  });
+
+  const toggleSidebar = () => {
+    setIsSidebarOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('victor_sidebar_open', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const closeSidebar = () => {
+    setIsSidebarOpen(false);
+    try {
+      localStorage.setItem('victor_sidebar_open', 'false');
+    } catch {}
+  };
+
   const [showMathToolbar, setShowMathToolbar] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
 
@@ -287,6 +316,13 @@ export default function App() {
   const [personalizationSettings, setPersonalizationSettings] = useState<PersonalizationSettings>(() => getPersonalizationSettings());
   const [isMicListening, setIsMicListening] = useState(false);
   const speechStopRef = useRef<(() => void) | null>(null);
+
+  // Chat stream auto-retry state for network recovery with exponential backoff
+  const [retryStatus, setRetryStatus] = useState<{
+    attempt: number;
+    maxRetries: number;
+    delayMs: number;
+  } | null>(null);
 
   const [enableWebSearch, setEnableWebSearch] = useState<boolean>(() => {
     try {
@@ -741,7 +777,7 @@ export default function App() {
   const currentSession =
     sessions.find((s) => s.id === currentSessionId) || sessions[0];
 
-  // Global Keyboard Shortcuts (Cmd+K / Ctrl+K for new chat, Esc to close modals)
+  // Global Keyboard Shortcuts (Cmd+K for new chat, Cmd+B to toggle sidebar, Esc to close)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       // Ctrl+K or Cmd+K: New Chat
@@ -749,9 +785,14 @@ export default function App() {
         e.preventDefault();
         handleNewSession();
       }
+      // Ctrl+B or Cmd+B: Toggle Sidebar
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        toggleSidebar();
+      }
       // Escape: Close sidebar or error banner
       if (e.key === 'Escape') {
-        setIsSidebarOpen(false);
+        closeSidebar();
         setErrorBanner(null);
       }
       // Ctrl+/ or Cmd+/: Focus chat textarea
@@ -904,6 +945,7 @@ export default function App() {
       abortControllerRef.current = null;
     }
     setIsGenerating(false);
+    setRetryStatus(null);
   };
 
   const sendMessage = async (customPrompt?: string) => {
@@ -957,6 +999,7 @@ export default function App() {
     );
 
     setIsGenerating(true);
+    setRetryStatus(null);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
@@ -968,174 +1011,262 @@ export default function App() {
       ? buildAtelierContext(targetProject)
       : undefined;
 
+    // Robust auto-retry configuration with exponential backoff & jitter
+    const MAX_STREAM_RETRIES = 3;
+    const INITIAL_RETRY_DELAY_MS = 1000;
+    const BACKOFF_MULTIPLIER = 2;
+
+    let attempt = 0;
+    let accumulatedText = '';
+    let accumulatedCodeExecutions: CodeExecutionInfo[] = [];
+    let accumulatedGroundingSources: GroundingSource[] = [];
+    let accumulatedSearchQueries: string[] = [];
+    let streamCompleted = false;
+
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: updatedMessages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          mode: currentSession.mode,
-          personalizationContext: buildPersonalizationContext(personalizationSettings),
-          webSearch: enableWebSearch,
-          atelierContext,
-        }),
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.error || `Server error: ${response.statusText}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error('Streaming not supported by server');
-      }
-
-      const decoder = new TextDecoder('utf-8');
-      let accumulatedText = '';
-      let accumulatedCodeExecutions: CodeExecutionInfo[] = [];
-      let accumulatedGroundingSources: GroundingSource[] = [];
-      let accumulatedSearchQueries: string[] = [];
-      let buffer = '';
-      let rafId: number | null = null;
-      let lastFlushedLength = 0;
-
-      // Batch state updates to 60fps display refresh instead of on every 2-character chunk
-      const flushUpdate = () => {
-        const currentText = accumulatedText;
-        setSessions((prev) =>
-          prev.map((s) => {
-            if (s.id === currentSessionId) {
-              return {
-                ...s,
-                messages: s.messages.map((m) =>
-                  m.id === assistantPlaceholderId
-                    ? {
-                        ...m,
-                        content: currentText,
-                        codeExecutions:
-                          accumulatedCodeExecutions.length > 0
-                            ? [...accumulatedCodeExecutions]
-                            : undefined,
-                        groundingSources:
-                          accumulatedGroundingSources.length > 0
-                            ? [...accumulatedGroundingSources]
-                            : undefined,
-                        searchQueries:
-                          accumulatedSearchQueries.length > 0
-                            ? [...accumulatedSearchQueries]
-                            : undefined,
-                      }
-                    : m,
-                ),
-              };
-            }
-            return s;
-          }),
-        );
-      };
-
-      const scheduleFlush = () => {
-        if (rafId !== null) return;
-        rafId = requestAnimationFrame(() => {
-          rafId = null;
-          flushUpdate();
-        });
-      };
-
-      let streamError: string | null = null;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith('data:')) continue;
-
-          const dataContent = trimmed.slice(5).trim();
-          if (dataContent === '[DONE]') {
-            break;
-          }
-
-          try {
-            const parsed = JSON.parse(dataContent);
-            if (parsed.error) {
-              streamError = parsed.error;
-              break;
-            }
-            if (parsed.text) {
-              accumulatedText += parsed.text;
-              scheduleFlush();
-            }
-            if (parsed.executableCode) {
-              accumulatedCodeExecutions.push({
-                language: parsed.executableCode.language || 'python',
-                code: parsed.executableCode.code || '',
-              });
-              scheduleFlush();
-            }
-            if (parsed.codeExecutionResult) {
-              if (accumulatedCodeExecutions.length > 0) {
-                const last =
-                  accumulatedCodeExecutions[accumulatedCodeExecutions.length - 1];
-                last.outcome = parsed.codeExecutionResult.outcome;
-                last.output = parsed.codeExecutionResult.output;
-              }
-              scheduleFlush();
-            }
-            if (Array.isArray(parsed.groundingSources)) {
-              for (const src of parsed.groundingSources) {
-                if (src.uri && !accumulatedGroundingSources.some((s) => s.uri === src.uri)) {
-                  accumulatedGroundingSources.push(src);
-                }
-              }
-              scheduleFlush();
-            }
-            if (Array.isArray(parsed.searchQueries)) {
-              for (const q of parsed.searchQueries) {
-                if (typeof q === 'string' && !accumulatedSearchQueries.includes(q)) {
-                  accumulatedSearchQueries.push(q);
-                }
-              }
-              scheduleFlush();
-            }
-          } catch (e: any) {
-            if (e.message && e.message !== 'Unexpected end of JSON input') {
-              console.warn('Error parsing stream event', e);
-            }
-          }
-        }
-
-        if (streamError) {
+      while (attempt <= MAX_STREAM_RETRIES) {
+        if (abortController.signal.aborted) {
           break;
         }
+
+        let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+        let rafId: number | null = null;
+
+        try {
+          if (attempt > 0) {
+            setRetryStatus(null);
+          }
+
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              messages: updatedMessages.map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+              mode: currentSession.mode,
+              personalizationContext: buildPersonalizationContext(personalizationSettings),
+              webSearch: enableWebSearch,
+              atelierContext,
+            }),
+            signal: abortController.signal,
+          });
+
+          if (!response.ok) {
+            const errJson = await response.json().catch(() => ({}));
+            const errorMsg = errJson.error || `Server error: ${response.statusText}`;
+            const err = new Error(errorMsg) as any;
+            err.status = response.status;
+            throw err;
+          }
+
+          reader = response.body?.getReader() || null;
+          if (!reader) {
+            throw new Error('Streaming not supported by server');
+          }
+
+          const decoder = new TextDecoder('utf-8');
+          // Reset buffer and variables for this attempt to prevent duplicated tokens
+          accumulatedText = '';
+          accumulatedCodeExecutions = [];
+          accumulatedGroundingSources = [];
+          accumulatedSearchQueries = [];
+          let buffer = '';
+
+          // Batch state updates to 60fps display refresh instead of on every 2-character chunk
+          const flushUpdate = () => {
+            const currentText = accumulatedText;
+            setSessions((prev) =>
+              prev.map((s) => {
+                if (s.id === currentSessionId) {
+                  return {
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === assistantPlaceholderId
+                        ? {
+                            ...m,
+                            content: currentText,
+                            codeExecutions:
+                              accumulatedCodeExecutions.length > 0
+                                ? [...accumulatedCodeExecutions]
+                                : undefined,
+                            groundingSources:
+                              accumulatedGroundingSources.length > 0
+                                ? [...accumulatedGroundingSources]
+                                : undefined,
+                            searchQueries:
+                              accumulatedSearchQueries.length > 0
+                                ? [...accumulatedSearchQueries]
+                                : undefined,
+                          }
+                        : m,
+                    ),
+                  };
+                }
+                return s;
+              }),
+            );
+          };
+
+          const scheduleFlush = () => {
+            if (rafId !== null) return;
+            rafId = requestAnimationFrame(() => {
+              rafId = null;
+              flushUpdate();
+            });
+          };
+
+          let streamError: string | null = null;
+          let receivedDone = false;
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+
+              const dataContent = trimmed.slice(5).trim();
+              if (dataContent === '[DONE]') {
+                receivedDone = true;
+                break;
+              }
+
+              try {
+                const parsed = JSON.parse(dataContent);
+                if (parsed.error) {
+                  streamError = parsed.error;
+                  break;
+                }
+                if (parsed.text) {
+                  accumulatedText += parsed.text;
+                  scheduleFlush();
+                }
+                if (parsed.executableCode) {
+                  accumulatedCodeExecutions.push({
+                    language: parsed.executableCode.language || 'python',
+                    code: parsed.executableCode.code || '',
+                  });
+                  scheduleFlush();
+                }
+                if (parsed.codeExecutionResult) {
+                  if (accumulatedCodeExecutions.length > 0) {
+                    const last =
+                      accumulatedCodeExecutions[accumulatedCodeExecutions.length - 1];
+                    last.outcome = parsed.codeExecutionResult.outcome;
+                    last.output = parsed.codeExecutionResult.output;
+                  }
+                  scheduleFlush();
+                }
+                if (Array.isArray(parsed.groundingSources)) {
+                  for (const src of parsed.groundingSources) {
+                    if (src.uri && !accumulatedGroundingSources.some((s) => s.uri === src.uri)) {
+                      accumulatedGroundingSources.push(src);
+                    }
+                  }
+                  scheduleFlush();
+                }
+                if (Array.isArray(parsed.searchQueries)) {
+                  for (const q of parsed.searchQueries) {
+                    if (typeof q === 'string' && !accumulatedSearchQueries.includes(q)) {
+                      accumulatedSearchQueries.push(q);
+                    }
+                  }
+                  scheduleFlush();
+                }
+              } catch (e: any) {
+                if (e.message && e.message !== 'Unexpected end of JSON input') {
+                  console.warn('Error parsing stream event', e);
+                }
+              }
+            }
+
+            if (streamError) {
+              break;
+            }
+          }
+
+          if (streamError) {
+            const err = new Error(streamError) as any;
+            throw err;
+          }
+
+          // Ensure final complete text is always flushed
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          flushUpdate();
+
+          // Guard against silent empty stream or premature disconnection without output
+          if (!accumulatedText.trim()) {
+            throw new Error("Victor was unable to complete the response due to a network interruption.");
+          }
+
+          // Successfully completed stream without interruptions!
+          streamCompleted = true;
+          setRetryStatus(null);
+          break; // Exit retry loop on success
+        } catch (streamErr: any) {
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          try {
+            reader?.cancel().catch(() => {});
+          } catch {}
+
+          // If user aborted deliberately (Stop button), do not retry
+          if (abortController.signal.aborted || streamErr?.name === 'AbortError') {
+            setRetryStatus(null);
+            return;
+          }
+
+          // Client errors (4xx other than 429) are not retryable
+          const isNonRetryableHttp =
+            streamErr?.status && streamErr.status >= 400 && streamErr.status < 500 && streamErr.status !== 429;
+          const canRetry = attempt < MAX_STREAM_RETRIES && !isNonRetryableHttp;
+
+          if (!canRetry) {
+            setRetryStatus(null);
+            throw streamErr;
+          }
+
+          attempt++;
+          // Exponential backoff with +/-20% jitter
+          const baseDelay = INITIAL_RETRY_DELAY_MS * Math.pow(BACKOFF_MULTIPLIER, attempt - 1);
+          const jitter = baseDelay * 0.2 * (Math.random() * 2 - 1);
+          const delayMs = Math.round(baseDelay + jitter);
+
+          console.warn(
+            `[Chat Stream Auto-Retry] Connection interrupted (attempt ${attempt}/${MAX_STREAM_RETRIES}). Backoff waiting ${delayMs}ms before retrying:`,
+            streamErr?.message || streamErr
+          );
+
+          setRetryStatus({ attempt, maxRetries: MAX_STREAM_RETRIES, delayMs });
+
+          // Wait for exponential backoff delay or user abort
+          await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(resolve, delayMs);
+            const onAbort = () => {
+              clearTimeout(timer);
+              reject(new DOMException('Aborted', 'AbortError'));
+            };
+            abortController.signal.addEventListener('abort', onAbort, { once: true });
+          });
+        }
       }
 
-      if (streamError) {
-        throw new Error(streamError);
-      }
-
-      // Ensure final complete text is always flushed
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
-      flushUpdate();
-
-      // Guard against silent empty stream
-      if (!accumulatedText.trim()) {
-        throw new Error("Victor was unable to complete the response. Please retry.");
+      if (abortController.signal.aborted || !streamCompleted) {
+        return;
       }
 
       // Parse and execute Jarvis Actions
@@ -1207,6 +1338,7 @@ export default function App() {
       }
     } finally {
       setIsGenerating(false);
+      setRetryStatus(null);
       abortControllerRef.current = null;
     }
   };
@@ -1415,7 +1547,7 @@ export default function App() {
         onNewSession={() => handleNewSession()}
         onDeleteSession={handleDeleteSession}
         isOpen={isSidebarOpen}
-        onClose={() => setIsSidebarOpen(false)}
+        onClose={closeSidebar}
         currentUser={currentUser}
         onOpenSignIn={() => setIsSignInModalOpen(true)}
         onOpenSettings={() => {
@@ -1440,9 +1572,10 @@ export default function App() {
             <button
               id="header-sidebar-toggle"
               type="button"
-              onClick={() => setIsSidebarOpen(true)}
+              onClick={toggleSidebar}
               className="p-2 rounded-xl text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition-all cursor-pointer"
-              title="Open Chat History"
+              title={isSidebarOpen ? "Collapse sidebar (Ctrl+B)" : "Open sidebar (Ctrl+B)"}
+              aria-label={isSidebarOpen ? "Collapse sidebar" : "Open sidebar"}
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -1608,7 +1741,31 @@ export default function App() {
                 );
               })}
 
-              {isGenerating && (
+              {retryStatus ? (
+                <div
+                  id="chat-stream-retry-banner"
+                  className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 text-amber-800 dark:text-amber-200 text-xs shadow-xs animate-pulse"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <RotateCcw className="w-4 h-4 text-amber-600 dark:text-amber-400 animate-spin shrink-0" />
+                    <div className="min-w-0">
+                      <p className="font-semibold truncate">
+                        Connection interrupted · Auto-retrying (attempt {retryStatus.attempt} of {retryStatus.maxRetries})
+                      </p>
+                      <p className="text-[11px] text-amber-700/80 dark:text-amber-300/80 mt-0.5">
+                        Backoff waiting {Math.round(retryStatus.delayMs / 100) / 10}s before reconnecting...
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleStopGeneration}
+                    className="px-2.5 py-1 rounded-lg bg-amber-600/15 hover:bg-amber-600/25 text-amber-900 dark:text-amber-100 text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : isGenerating ? (
                 <div className="flex items-center gap-2.5 p-3 text-xs text-zinc-500 dark:text-zinc-400 font-medium">
                   <div className="flex gap-1 items-center">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500 animate-bounce" />
@@ -1617,7 +1774,7 @@ export default function App() {
                   </div>
                   <span>Thinking and drafting response...</span>
                 </div>
-              )}
+              ) : null}
               <div ref={messagesEndRef} className="h-px w-full" />
             </div>
           )}

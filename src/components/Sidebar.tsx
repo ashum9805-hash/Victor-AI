@@ -12,6 +12,7 @@ import {
   BookOpen,
   ChevronRight,
   ExternalLink,
+  PanelLeftClose,
 } from 'lucide-react';
 import { ChatSession, UserProfile, AtelierProject } from '../types';
 
@@ -83,36 +84,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Sidebar container */}
       <aside
         id="app-sidebar"
-        className={`fixed md:static top-0 bottom-0 left-0 z-50 w-72 bg-zinc-900 text-zinc-100 flex flex-col border-r border-zinc-800 transition-transform duration-200 ease-in-out ${
-          isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+        aria-hidden={!isOpen}
+        className={`fixed md:relative top-0 bottom-0 left-0 z-50 h-full bg-zinc-900 text-zinc-100 flex flex-col transition-all duration-300 ease-in-out shrink-0 overflow-hidden ${
+          isOpen
+            ? 'w-72 translate-x-0 border-r border-zinc-800 md:opacity-100 shadow-2xl md:shadow-none'
+            : 'w-72 -translate-x-full pointer-events-none md:translate-x-0 md:w-0 md:opacity-0 md:border-r-0'
         }`}
       >
-        {/* Top Header & New Chat button */}
-        <div className="p-3.5 border-b border-zinc-800/80 flex items-center justify-between gap-2">
-          <button
-            id="sidebar-new-chat-btn"
-            type="button"
-            aria-label="Start a new chat"
-            onClick={() => {
-              onNewSession();
-              onClose();
-            }}
-            className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700/80 active:scale-98 text-sm font-medium text-white transition-all shadow-xs cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>New Chat</span>
-          </button>
+        <div className="w-72 h-full flex flex-col min-h-0 shrink-0">
+          {/* Top Header & New Chat button */}
+          <div className="p-3.5 border-b border-zinc-800/80 flex items-center justify-between gap-2">
+            <button
+              id="sidebar-new-chat-btn"
+              type="button"
+              aria-label="Start a new chat"
+              onClick={() => {
+                onNewSession();
+                if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                  onClose();
+                }
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700/80 active:scale-98 text-sm font-medium text-white transition-all shadow-xs cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>New Chat</span>
+            </button>
 
-          <button
-            id="sidebar-close-btn"
-            type="button"
-            aria-label="Close sidebar"
-            onClick={onClose}
-            className="md:hidden p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+            <button
+              id="sidebar-close-btn"
+              type="button"
+              aria-label="Collapse sidebar"
+              title="Collapse sidebar (Ctrl+B)"
+              onClick={onClose}
+              className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 active:scale-95 transition-all cursor-pointer"
+            >
+              <PanelLeftClose className="w-4 h-4 hidden md:block" />
+              <X className="w-4 h-4 md:hidden" />
+            </button>
+          </div>
 
         {/* Tab Switcher: Chats vs Atelier */}
         <div className="px-3 pt-2 pb-1">
@@ -226,7 +235,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       type="button"
                       onClick={() => {
                         onSelectSession(session.id);
-                        onClose();
+                        if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                          onClose();
+                        }
                       }}
                       className="flex items-center gap-2.5 flex-1 min-w-0 text-left cursor-pointer"
                     >
@@ -385,6 +396,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Settings className="w-4 h-4 text-zinc-400 group-hover:text-zinc-100 group-hover:rotate-45 transition-transform duration-300" />
           </button>
+        </div>
         </div>
       </aside>
     </>

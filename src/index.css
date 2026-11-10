@@ -82,6 +82,58 @@ html.dark body {
   z-index: 10;
 }
 
+/* Chat message typography & generous spacing */
+.prose {
+  font-size: 0.9375rem;
+  line-height: 1.75;
+}
+
+.prose p {
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  line-height: 1.75;
+}
+
+.prose p:last-child {
+  margin-bottom: 0;
+}
+
+.prose ul,
+.prose ol {
+  margin-top: 0.9rem;
+  margin-bottom: 1.25rem;
+  padding-left: 1.5rem;
+}
+
+.prose li {
+  margin-top: 0.45rem;
+  margin-bottom: 0.45rem;
+  line-height: 1.7;
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+  margin-top: 1.75rem;
+  margin-bottom: 0.85rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.prose h1:first-child,
+.prose h2:first-child,
+.prose h3:first-child {
+  margin-top: 0;
+}
+
+.prose blockquote {
+  margin-top: 1.25rem;
+  margin-bottom: 1.25rem;
+  padding-left: 1rem;
+  border-left-width: 3px;
+}
+
 /* Ensure KaTeX math formulas adapt cleanly to dark mode */
 .dark .katex,
 .dark .katex-html {
